@@ -26,7 +26,7 @@ def get_fileNames(main_dir):
 def fileCount(path):
     return len(get_fileNames(path))
 
-def gen_batch(content, batch_size, is_Train = True, shuffle = True):
+def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
     
     if is_Train == True:
         start = 0.0
@@ -60,8 +60,15 @@ def gen_batch(content, batch_size, is_Train = True, shuffle = True):
         batch_Y[batch_idx, :, 0:6] = content['data'][step, 1, :, 0:6]
         batch_L[batch_idx, :, 0:6] = content['data'][step, 2, :, 0:6]
         
+        batch_X[batch_idx, :, 3:6] *= vM
+        batch_Y[batch_idx, :, 3:6] *= vM
+        batch_L[batch_idx, :, 3:6] *= vM
+
         # FIXME: How to store grid cards?
         batch_X[batch_idx, :, 6] = 1
+        batch_Y[batch_idx, :, 6] = 1
+        batch_L[batch_idx, :, 6] = 1
+
         batch_X_size[batch_idx] = maxParticlesPerGrid
         avgCard += batch_X_size[batch_idx]
 
@@ -118,7 +125,7 @@ def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True):
         data = np.load(files[i % len(files)]) # [step, 3, gridCount, 6(channels)]
         content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[2]}
         # content = read_file(files[0], step_count * vM)
-        yield gen_batch(content, batch_size, is_Train = True, shuffle = shuffle), gen_batch(content, batch_size, is_Train = False, shuffle = shuffle)
+        yield gen_batch(content, batch_size, vM, is_Train = True, shuffle = shuffle), gen_batch(content, batch_size, vM, is_Train = False, shuffle = shuffle)
 
 def gen_epochs_predict(path, start_step, batch_size, step_count, vM):
 

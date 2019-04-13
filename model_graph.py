@@ -695,7 +695,10 @@ class model_particles:
         normalized_X = self.ph_X / 48.0
         normalized_Y = self.ph_Y / 48.0
         normalized_L = self.ph_L / 48.0
-        
+       
+        # tf.summary.histogram('groundTruth_pos', self.ph_X[:, :, 0:3])
+        # tf.summary.histogram('groundTruth_vel', self.ph_X[:, :, 3:6])
+
         # Mixed FP16 & FP32
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
         # with tf.variable_scope('net'):
@@ -749,8 +752,10 @@ class model_particles:
                 tf.summary.histogram('simulated Y', simY)
 
                 # Decoders
-                _, [rec_YX, _], _ = self.particleDecoder(sim_posYX, sim_feaYX, self.ph_card, 6, True, reuse)
-                _, [ rec_Y, _], _ = self.particleDecoder( sim_posY,  sim_feaY, self.ph_card, 6, True,  True)
+                # _, [rec_YX, _], _ = self.particleDecoder(sim_posYX, sim_feaYX, self.ph_card, 6, True, reuse)
+                # _, [ rec_Y, _], _ = self.particleDecoder( sim_posY,  sim_feaY, self.ph_card, 6, True,  True)
+                _, [rec_YX, _], _ = self.particleDecoder( posX, feaX, self.ph_card, 6, True, reuse)
+                _, [ rec_Y, _], _ = self.particleDecoder( posY, feaY, self.ph_card, 6, True,  True)
 
                 rec_YX = rec_YX * 48.0
                 rec_Y  = rec_Y  * 48.0
@@ -773,7 +778,8 @@ class model_particles:
                     simLX = tf.concat([sim_posLX, sim_feaLX], -1)
                     
                     _, [rec_LX, _], _ = self.particleDecoder(sim_posLX, sim_feaLX, self.ph_card, 6, True,  True)
-                    _, [ rec_L, _], _ = self.particleDecoder( sim_posL,  sim_feaL, self.ph_card, 6, True,  True)
+                    # _, [ rec_L, _], _ = self.particleDecoder( sim_posL,  sim_feaL, self.ph_card, 6, True,  True)
+                    _, [ rec_L, _], _ = self.particleDecoder( posL,  feaL, self.ph_card, 6, True,  True)
                     
                     rec_L  = rec_L  * 48.0
                     rec_LX = rec_LX * 48.0

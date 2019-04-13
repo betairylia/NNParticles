@@ -24,6 +24,8 @@ import progressbar
 
 from tensorflow.python import debug as tf_debug
 
+from tensorflow.python.client import timeline
+
 parser = argparse.ArgumentParser(description="Run the NN for particle simulation")
 
 parser.add_argument('datapath')
@@ -57,6 +59,7 @@ parser.add_argument('-name', '--name', type = str, default = "NoName", help = "N
 parser.add_argument('-save', '--save', type = str, default = "None", help = "Path to store trained model")
 parser.add_argument('-load', '--load', type = str, default = "None", help = "File to load to continue training")
 parser.add_argument('-debug', '--debug', dest = "enable_debug", action = 'store_const', default = False, const = True, help = "Enable debugging")
+parser.add_argument('-prof', '--profile', type = str, default = "None", help = "Path to store profiling timeline (at step 100)")
 
 args = parser.parse_args()
 
@@ -126,6 +129,10 @@ config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 sess = tf.Session(config = config)
 
+if args.profile != "None":
+    run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+    run_metadata = tf.RunMetadata()
+
 if args.enable_debug:
     sess = tf_debug.LocalCLIDebugWrapperSession(sess)
     sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
@@ -170,10 +177,24 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
     # Train
     for _x, _x_size in epoch_train:
-        feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
-        _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict)
-        train_writer.add_summary(summary, batch_idx_train)
-        batch_idx_train += 1
+        
+        if batch_idx_train == 10 and args.profile != "None":
+            print(colored("Profiling in progress...", 'yellow'))
+            feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+            _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict, options = run_options, run_metadata = run_metadata)
+            train_writer.add_summary(summary, batch_idx_train)
+            batch_idx_train += 1
+
+            fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            with open (os.path.join('profiles/', args.profile + '.json'), 'w') as f:
+                f.write(chrome_trace)
+        
+        else:
+            feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+            _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict)
+            train_writer.add_summary(summary, batch_idx_train)
+            batch_idx_train += 1
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
 
