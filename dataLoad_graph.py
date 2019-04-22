@@ -39,12 +39,16 @@ def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
     
     assert content['gridSize'] == maxParticlesPerGrid
 
-    batch_X = np.zeros((batch_size, maxParticlesPerGrid, 7))
-    batch_Y = np.zeros((batch_size, maxParticlesPerGrid, 7))
-    batch_L = np.zeros((batch_size, maxParticlesPerGrid, 7))
+    batch_X = np.zeros((batch_size, maxParticlesPerGrid, content['dim'] + 1))
+    batch_Y = np.zeros((batch_size, maxParticlesPerGrid, content['dim'] + 1))
+    batch_L = np.zeros((batch_size, maxParticlesPerGrid, content['dim'] + 1))
     batch_X_size = np.zeros((batch_size))
     batch_idx = 0
     avgCard = 0
+
+    noSim = False
+    if content['data'].ndim == 3:
+        noSim = True
 
     # shuffle the steps
     steps = list(range(content['stepCount']))
@@ -56,21 +60,29 @@ def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
     
     for step in steps:
         
-        batch_X[batch_idx, :, 0:6] = content['data'][step, 0, :, 0:6]
-        batch_Y[batch_idx, :, 0:6] = content['data'][step, 1, :, 0:6]
-        batch_L[batch_idx, :, 0:6] = content['data'][step, 2, :, 0:6]
-        
-        batch_X[batch_idx, :, 3:6] *= vM
-        batch_Y[batch_idx, :, 3:6] *= vM
-        batch_L[batch_idx, :, 3:6] *= vM
+        if noSim == False:
+            batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, 0, :, 0:content['dim']]
+            batch_Y[batch_idx, :, 0:content['dim']] = content['data'][step, 1, :, 0:content['dim']]
+            batch_L[batch_idx, :, 0:content['dim']] = content['data'][step, 2, :, 0:content['dim']]
 
-        # FIXME: How to store grid cards?
-        batch_X[batch_idx, :, 6] = 1
-        batch_Y[batch_idx, :, 6] = 1
-        batch_L[batch_idx, :, 6] = 1
+            batch_X[batch_idx, :, 3:content['dim']] *= vM        
+            batch_Y[batch_idx, :, 3:content['dim']] *= vM
+            batch_L[batch_idx, :, 3:content['dim']] *= vM
 
-        batch_X_size[batch_idx] = maxParticlesPerGrid
-        avgCard += batch_X_size[batch_idx]
+            # FIXME: How to store grid cards?
+            batch_X[batch_idx, :, content['dim']] = 1
+            batch_Y[batch_idx, :, content['dim']] = 1
+            batch_L[batch_idx, :, content['dim']] = 1
+
+            batch_X_size[batch_idx] = maxParticlesPerGrid
+            avgCard += batch_X_size[batch_idx]
+
+        else:
+            batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, :, 0:content['dim']]
+            batch_X[batch_idx, :, 3:content['dim']] *= vM
+            batch_X[batch_idx, :, content['dim']] = 1
+            batch_X_size[batch_idx] = maxParticlesPerGrid
+            avgCard += batch_X_size[batch_idx]
 
         # Count batch
         batch_idx += 1
@@ -123,7 +135,10 @@ def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True):
     # for i in range(n_epochs * len(files)):
         print("Reading data...")
         data = np.load(files[i % len(files)]) # [step, 3, gridCount, 6(channels)]
-        content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[2]}
+        if data.ndim == 3:
+            content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[1], 'dim': data.shape[2]}
+        else:
+            content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[2], 'dim': data.shape[3]}
         # content = read_file(files[0], step_count * vM)
         yield gen_batch(content, batch_size, vM, is_Train = True, shuffle = shuffle), gen_batch(content, batch_size, vM, is_Train = False, shuffle = shuffle)
 

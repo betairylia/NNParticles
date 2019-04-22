@@ -49,6 +49,8 @@ parser.add_argument('-l2', '--l2-loss', dest = 'loss_func', action='store_const'
 parser.add_argument('-maxpool', '--maxpool', dest = 'combine_method', action='store_const', default = tf.reduce_mean, const = tf.reduce_max, help = "use Max pooling instead of sum up for permutation invariance")
 parser.add_argument('-adam', '--adam', dest = 'adam', action='store_const', default = False, const = True, help = "Use Adam optimizer")
 parser.add_argument('-fp16', '--fp16', dest = 'dtype', action='store_const', default = tf.float32, const = tf.float16, help = "Use FP16 instead of FP32")
+parser.add_argument('-nloop', '--no-loop', dest = 'doloop', action='store_const', default = True, const = False, help = "Don't loop simulation regularization")
+parser.add_argument('-nsim', '--no-sim', dest = 'dosim', action='store_const', default = True, const = False, help = "Don't do Simulation")
 
 parser.add_argument('-log', '--log', type = str, default = "logs", help = "Path to log dir")
 parser.add_argument('-name', '--name', type = str, default = "NoName", help = "Name to show on tensor board")
@@ -95,6 +97,8 @@ model.combine_method = args.combine_method
 model.knn_k = args.nearest_neighbor
 model.cluster_feature_dim = args.cluster_dim
 model.cluster_count = args.cluster_count
+model.doSim = args.dosim
+model.doLoop = args.dosim and args.doloop
 
 # Headers
 # headers = dataLoad.read_file_header(dataLoad.get_fileNames(args.datapath)[0])
@@ -105,16 +109,18 @@ model.initial_grid_size = model.total_world_size / 16
 
 # Build the model
 normalized_X = model.ph_X / 48.0
-cpos, cfea = model.build_predict_Enc(normalized_X, False, False)
+normalized_Y = model.ph_Y / 48.0
+cpos, cfea, evalsX = model.build_predict_Enc(normalized_X, False, False)
+cpos_Y, cfea_Y, evalsY = model.build_predict_Enc(normalized_Y, False, True)
 
 pRange = 3
-outDim = 6
+outDim = 3
 
 ph_cpos = tf.placeholder(args.dtype, [args.batch_size, args.cluster_count, pRange])
 ph_cfea = tf.placeholder(args.dtype, [args.batch_size, args.cluster_count, args.cluster_dim])
 spos, sfea = model.build_predict_Sim(ph_cpos, ph_cfea, False, False)
-rec , loss = model.build_predict_Dec(   spos,    sfea, model.ph_Y[:, :, 0:outDim], False, False)
-prec, ___l = model.build_predict_Dec(ph_cpos, ph_cfea, model.ph_X[:, :, 0:outDim], False, True)
+rec , loss = model.build_predict_Dec(   spos,    sfea, model.ph_Y[:, :, 0:outDim], False, False, outDim = outDim)
+prec, ___l = model.build_predict_Dec(ph_cpos, ph_cfea, model.ph_X[:, :, 0:outDim], False, True,  outDim = outDim)
 
 # Create session
 sess = tf.Session()
@@ -155,10 +161,15 @@ stepFactor = 9
 
 bs = args.batch_size
 N = args.voxel_size
-totalIterations = 120
+totalIterations = 90
 
 groundTruth = np.zeros((totalIterations, N, outDim))
+groundTrutX = np.zeros((totalIterations, N, outDim))
 reconstruct = np.zeros((totalIterations, N, outDim))
+
+clusters_X  = np.zeros((totalIterations, args.cluster_count, pRange))
+clusters_Y  = np.zeros((totalIterations, args.cluster_count, pRange))
+
 totalIterations -= 1
 
 for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, False):
@@ -172,7 +183,7 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
         # Initial batch - compute latent clusters
         if ecnt == 0:
-            _cpos, _cfea = sess.run([cpos, cfea], feed_dict = { model.ph_X: _x[0] })
+            _cpos, _cfea, eX = sess.run([cpos, cfea, evalsX], feed_dict = { model.ph_X: _x[0] })
             _spos, _sfea = _cpos, _cfea
             _rec, n_loss = sess.run([prec, ___l], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
 
@@ -187,14 +198,22 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
         # Simulation
         _spos, _sfea, _rec, n_loss = sess.run([spos, sfea, rec, loss], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_Y: _x[1], model.ph_max_length: maxl_array })
         
+        # Get encoded features & clusters
+        _cpos_x, _cfea_x = sess.run([  cpos,   cfea], feed_dict = { model.ph_X: _x[0] })
+        _cpos_y, _cfea_y = sess.run([cpos_Y, cfea_Y], feed_dict = { model.ph_Y: _x[1] })
+
         sidx = batch_idx_train * bs
         eidx = (batch_idx_train + 1) * bs
         batch_idx_train += 1
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
 
+        groundTrutX[sidx:eidx, :, :] = _x[0][:, :, 0:outDim]
         groundTruth[sidx:eidx, :, :] = _x[1][:, :, 0:outDim]
         reconstruct[sidx:eidx, :, :] = _rec[:, :, 0:outDim]
+
+        clusters_X[ sidx:eidx, :, :] = _cpos_x[:, :, 0:pRange] * 48.0
+        clusters_Y[ sidx:eidx, :, :] = _cpos_y[:, :, 0:pRange] * 48.0
 
         if batch_idx_train >= (totalIterations + 1):
             break
@@ -215,4 +234,18 @@ if not os.path.exists(outpath):
 
 np.save(os.path.join(outpath, 'gt.npy'), groundTruth)
 np.save(os.path.join(outpath, 'rc.npy'), reconstruct)
+np.save(os.path.join(outpath, 'gX.npy'), groundTrutX)
+np.save(os.path.join(outpath, 'cX.npy'), clusters_X)
+np.save(os.path.join(outpath, 'cY.npy'), clusters_Y)
+
+# Generate CC ASC files
+if outDim > 3:
+    with open(os.path.join(outpath, 'gt.asc'), 'w') as fgt:
+        for i in range(N):
+            fgt.write("%f %f %f %f %f %f %f\n" % (groundTruth[0, i, 0], groundTruth[0, i, 1], groundTruth[0, i, 2], groundTruth[0, i, 3], groundTruth[0, i, 4], groundTruth[0, i, 5], eX[0][0, i, 3]))
+
+    with open(os.path.join(outpath, 'rc.asc'), 'w') as fgt:
+        for i in range(N):
+            fgt.write("%f %f %f %f %f %f\n" % (reconstruct[0, i, 0], reconstruct[0, i, 1], reconstruct[0, i, 2], reconstruct[0, i, 3], reconstruct[0, i, 4], reconstruct[0, i, 5]))
+
 

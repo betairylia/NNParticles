@@ -125,3 +125,7 @@ dmypy.json
 savedModels/
 log*/
 MDSets/
+*.npy
+*.grbin
+prof*/
+Sim_Reconstruction/

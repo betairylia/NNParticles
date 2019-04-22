@@ -1674,6 +1674,137 @@ class model_particles:
 
                 return 0, [pos, fold_before_prefine], 0
 
+            if self.decoder_arch == 'global_graph_bn':
+
+                # input_latent : [batch_size, channels]
+                
+                # TODO: Fold from a single latent vector
+
+                global_latent = input_latent[:, :self.particle_latent_dim]
+                cluster_pos = input_latent[:, self.particle_latent_dim:(self.particle_latent_dim+self.cluster_count*3)]
+                local_feature = input_latent[:, (self.particle_latent_dim+self.cluster_count*3):]
+                cluster_pos = tf.reshape(cluster_pos, [-1, self.cluster_count, 3])
+                local_feature = tf.reshape(local_feature, [-1, self.cluster_count, self.cluster_feature_dim])
+
+                # Folding stage
+                fold_particles_count = self.gridMaxSize - self.cluster_count
+                # net_input = InputLayer(input_latent, name = 'input')
+                
+                # FIXME: no card in this model
+
+                # generate random noise
+                z = tf.random.normal([self.batch_size * fold_particles_count, output_dim])
+
+                # conditional generative network
+                latents = \
+                tf.reshape\
+                (\
+                    tf.broadcast_to\
+                    (\
+                        tf.reshape(global_latent, [self.batch_size, 1, self.particle_latent_dim]),\
+                        [self.batch_size, fold_particles_count, self.particle_latent_dim]\
+                    ),\
+                    [self.batch_size * fold_particles_count, self.particle_latent_dim]\
+                )
+                pos = z
+
+                conditional_input = tf.concat([pos, latents], axis = -1)
+
+                c = InputLayer(conditional_input, name = 'cond/input')
+                # c = DenseLayer(c, n_units = self.particle_hidden_dim, act = None, name = 'cond/fc1', W_init = w_init)
+                # c = BatchNormLayer(c, decay = 0.999, act = self.act, is_train = is_train, name = 'cond/fc1/bn')
+                # c = DenseLayer(c, n_units = self.particle_hidden_dim, act = None, name = 'cond/fc2', W_init = w_init)
+                # c = BatchNormLayer(c, decay = 0.999, act = self.act, is_train = is_train, name = 'cond/fc2/bn')
+                # c = DenseLayer(c, n_units = self.particle_hidden_dim, act = None, name = 'cond/fc3', W_init = w_init)
+                # c = BatchNormLayer(c, decay = 0.999, act = self.act, is_train = is_train, name = 'cond/fc3/bn')
+
+                # tmp = c
+                resCount = 0
+
+                for i in range(resCount):
+
+                    conditional_input = tf.concat([c.outputs, latents], axis = -1)
+
+                    cc = InputLayer(conditional_input, name = 'res%d/cond/input' % i)
+                    cc = DenseLayer(cc, n_units = self.particle_hidden_dim, act = None, name = 'res%d/cond/fc1' % i, W_init = w_init)
+                    cc = BatchNormLayer(cc, decay = 0.999, act = self.act, is_train = is_train, name = 'res%d/cond/fc1/bn' % i)
+                    cc = DenseLayer(cc, n_units = self.particle_hidden_dim, act = None, name = 'res%d/cond/fc2' % i, W_init = w_init)
+                    cc = BatchNormLayer(cc, decay = 0.999, act = self.act, is_train = is_train, name = 'res%d/cond/fc2/bn' % i)
+                    cc = DenseLayer(cc, n_units = self.particle_hidden_dim, act = None, name = 'res%d/cond/fc3' % i, W_init = w_init)
+                    cc = BatchNormLayer(cc, decay = 0.999, act = self.act, is_train = is_train, name = 'res%d/cond/fc3/bn' % i)
+
+                    # if i < (resCount - 1):
+                    c = ElementwiseLayer([c, cc], tf.add, name = 'res%d/add' % i)
+
+                # c = ElementwiseLayer([c, tmp], tf.add, name = 'resout/add')
+                c = DenseLayer(c, n_units = output_dim, act = None, name = 'resFinal/cond/resout', W_init = w_init)
+                pos = c.outputs
+
+                alter_particles = tf.reshape(pos, [self.batch_size, fold_particles_count, output_dim])
+                fold_before_prefine = tf.concat([alter_particles, cluster_pos], axis = 1)
+
+                tf.summary.histogram('Particles_AfterFolding', alter_particles)
+
+                # Graph pos-refinement stage
+                # Obtain features for alter particles
+
+                # Create the graph
+                posAlter, posRefer, gp_idx, gp_edg = bip_kNNG_gen(alter_particles, cluster_pos, self.knn_k - 6, 3, name = 'bi_ggen_pre')
+
+                # Create a empty feature (0.0)
+                n = tf.reduce_mean(tf.zeros_like(alter_particles), axis = -1, keepdims = True)
+
+                # Do the convolution
+                convSteps = 3
+                varsGConv = []
+                for i in range(convSteps):
+                    n, v = bip_kNNGConvBN_wrapper(n, local_feature, gp_idx, gp_edg, self.batch_size, fold_particles_count, self.particle_hidden_dim // 2, self.act, is_train = True, name = 'gconv%d_pre' % i, W_init = w_init)
+                    varsGConv.append(v)
+           
+                fold_particle_features = n
+
+                # Reduce clusters' features
+                # clusters: [bs, N_clusters, cluster_feature_dim]
+                n, vars3 = Conv1dWrapper(local_feature, self.particle_hidden_dim // 2, 1, 1, 'SAME', self.act, w_init, b_init, True, 'conv1')
+                ref_particle_features = n
+
+                # Combine them to a single graph
+                pos = tf.concat([posRefer, posAlter], axis = 1) # [bs, N, 3]
+                n = tf.concat([ref_particle_features, fold_particle_features], axis = 1) # [bs, N, phd]
+
+                # Position Refinement
+                refine_loops = 2
+                refine_res_blocks = 2
+                vars_loop = []
+
+                for r in range(refine_loops):
+                
+                    _, gr_idx, gr_edg = kNNG_gen(pos, self.knn_k, 3, name = 'grefine%d/ggen' % r)
+                    tmp = n
+
+                    for i in range(refine_res_blocks):
+                        
+                        # Pos-refinement
+                        # pos, v = kNNGPosition_refine(pos, n, self.act, W_init = w_init_pref, b_init = b_init, name = 'gloop%d/pos_refine' % i)
+                        # vars_loop.append(v)
+
+                        # Graph generation
+                        # _, gl_idx, gl_edg = kNNG_gen(pos, self.knn_k, 3, name = 'gloop%d/ggen' % i)
+
+                        # Convolution
+                        nn, v = kNNGConvBN_wrapper(n, gr_idx, gr_edg, self.batch_size, self.gridMaxSize, self.particle_hidden_dim // 2, self.act, is_train = is_train, name = 'gr%d/gloop%d/gconv1' % (r, i), W_init = w_init, b_init = b_init)
+                        vars_loop.append(v)
+                        
+                        nn, v = kNNGConvBN_wrapper(nn, gr_idx, gr_edg, self.batch_size, self.gridMaxSize, self.particle_hidden_dim // 2, self.act, is_train = is_train, name = 'gr%d/gloop%d/gconv2' % (r, i), W_init = w_init, b_init = b_init)
+                        vars_loop.append(v)
+
+                        n = n + nn
+
+                    n = n + tmp
+                    pos, v = kNNGPosition_refine(pos, n, self.act, W_init = w_init_pref, b_init = b_init, name = 'gr%d/grefine/refine' % r)
+                    vars_loop.append(v)
+
+                return 0, [pos, fold_before_prefine], 0
 
             if self.decoder_arch == 'deep_mask_fold_bn': # Folding-Net decoder structure (3D variation)
 

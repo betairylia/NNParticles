@@ -45,17 +45,17 @@ def Laplacian(bs, N, k, kNNIdx, name = 'kNNG_laplacian'):
         # print(A.shape)
         A_T = tf.transpose(A, [0, 2, 1])
         A_undirected = tf.math.logical_or(A, A_T)
-        A = tf.cast(A_undirected, tf.float32, name = 'A_undirected') # [bs, N, N]
+        A = tf.cast(A_undirected, tf.float16, name = 'A_undirected') # [bs, N, N]
         # print(A.shape)
 
-        D = tf.matrix_set_diag(tf.zeros([bs, N, N], tf.float32), tf.reduce_sum(A, axis = -1)) # [bs, N] -> [bs, N, N]
+        # D = tf.matrix_set_diag(tf.zeros([bs, N, N], tf.float32), tf.reduce_sum(A, axis = -1)) # [bs, N] -> [bs, N, N]
         # print(D.shape)
-        L = D - A
+        L = tf.matrix_set_diag(-A, tf.reduce_sum(A, axis = -1) - 1) # We have self-loops
         # print(L.shape)
 
         # Normalizations for the laplacian?
 
-        return L, A, D
+        return tf.cast(L, default_dtype), 0, 0
 
 # Inputs: [bs, N, C]
 # Builds edges X -> Y
@@ -72,18 +72,20 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
 
         posX = Xs[:, :, :pos_range]
         posY = Ys[:, :, :pos_range]
-        drow = tf.reshape(posX, [bs, Nx, 1, pos_range]) # duplicate for row
-        dcol = tf.reshape(posY, [bs, 1, Ny, pos_range]) # duplicate for column
+        drow = tf.cast(tf.reshape(posX, [bs, Nx, 1, pos_range]), tf.float16) # duplicate for row
+        dcol = tf.cast(tf.reshape(posY, [bs, 1, Ny, pos_range]), tf.float16) # duplicate for column
         
         local_pos = drow - dcol #[bs, Nx, Ny, 3]
-        minusdist = -tf.sqrt(tf.reduce_sum(tf.square(local_pos), axis = 3))
+        # minusdist = -tf.sqrt(tf.reduce_sum(tf.square(local_pos), axis = 3))
+        # minusdist = -tf.sqrt(tf.add_n(tf.unstack(tf.square(local_pos), axis = 3))) # Will this be faster?
+        minusdist = -tf.norm(local_pos, ord = 'euclidean', axis = -1)
 
         _kNNEdg, _TopKIdx = tf.nn.top_k(minusdist, k)
         TopKIdx = _TopKIdx[:, :, :] # No self-loops? (Separated branch for self-conv)
         # TopKIdx = _TopKIdx # Have self-loops?
         kNNEdg = -_kNNEdg[:, :, :] # Better methods?
         kNNEdg = tf.stop_gradient(kNNEdg) # Don't flow gradients here to avoid nans generated for unselected edges
-        kNNEdg = tf.reshape(kNNEdg, [bs, Nx, k, 1])
+        kNNEdg = tf.cast(tf.reshape(kNNEdg, [bs, Nx, k, 1]), default_dtype)
 
         # Build NxKxC Neighboor tensor
         # Create indices
@@ -94,7 +96,7 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
         gather_lpos_indices = tf.stack([batches, Ns, TopKIdx], axis = -1)
 
         # [x, y, z], 1st order moment
-        neighbor_pos = tf.gather_nd(local_pos, gather_lpos_indices) # [bs, Nx, k, 3]
+        neighbor_pos = tf.cast(tf.gather_nd(local_pos, gather_lpos_indices), default_dtype) # [bs, Nx, k, 3]
 
         # [xx, xy, xz, yx, yy, yz, zx, zy, zz], 2nd order moment
         neighbor_pos_rs = tf.reshape(neighbor_pos, [bs, Nx, k, 3, 1])
@@ -113,7 +115,7 @@ def kNNG_gen(inputs, k, pos_range, name = 'kNNG_gen'):
 # kNNIdx: [bs, Nx, k]
 # kNNEdg: [bs, Nx, k, eC]
 # Edges are X -> Y
-def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_final = False, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
+def bip_kNNGConvLayer_concatMLP(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_final = False, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
     
     with tf.variable_scope(name):
 
@@ -176,7 +178,60 @@ def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_fin
         if not no_act_final:
             res = act(res)
 
-    return resnbr, [W_neighbor, b_neighbor, W_edges, b_edges, W_self, b_self] # [bs, Nx, channels]
+    return res, [W_neighbor, b_neighbor, W_edges, b_edges, W_self, b_self] # [bs, Nx, channels]
+
+def bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
+    
+    with tf.variable_scope(name):
+
+        bs = Xs.shape[0]
+        Nx = Xs.shape[1]
+        Ny = Ys.shape[1]
+        Cx = Xs.shape[2]
+        Cy = Ys.shape[2]
+        k = kNNIdx.shape[2]
+        eC = kNNEdg.shape[3]
+
+        neighbors = tf.gather_nd(Ys, kNNIdx)
+        # neighbors: Edge u-v = [u;v;edg]
+        neighbors = tf.concat([neighbors, tf.broadcast_to(tf.reshape(Xs, [bs, Nx, 1, Cx]), [bs, Nx, k, Cx]), kNNEdg], axis = -1) # [bs, Nx, k, Cx+Cy+eC]
+
+        ### Do the convolution ###
+
+        # Collect neightbors ("M" stage)
+        W_neighbor = tf.get_variable('W_neighbor', dtype = default_dtype, shape = [1, 1, Cx+Cy+eC, channels], initializer = W_init, trainable=True)
+        b_neighbor = tf.get_variable('b_neighbor', dtype = default_dtype, shape = [channels], initializer = b_init, trainable=True)
+
+        res = tf.nn.conv2d(neighbors, W_neighbor, [1, 1, 1, 1], padding = 'SAME')
+        res = tf.reduce_sum(res, axis = 2) # combine_method?
+        # res = tf.add_n(tf.unstack(res, axis = 2)) # combine_method? # nearly the same performance
+        res = tf.nn.bias_add(res, b_neighbor)
+
+        if act:
+            res = act(res)
+
+    return res, [W_neighbor, b_neighbor] # [bs, Nx, channels]
+
+def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, kernel_size, no_act_final = False, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
+
+    with tf.variable_scope(name):
+
+        bs = Xs.shape[0]
+        Nx = Xs.shape[1]
+        Ny = Ys.shape[1]
+        Cx = Xs.shape[2]
+        Cy = Ys.shape[2]
+        k = kNNIdx.shape[2]
+        eC = kNNEdg.shape[3]
+
+        # weight weights
+        raise NotImplementedError
+
+        neighbors = tf.gather_nd(Ys, kNNIdx)
+
+        # candidate weights
+        W_candidate = tf.get_variable('W', dtype = default_dtype, shape = [kernel_size, Cy + eC, channels], initializer = W_init, trainable = True)
+        b = tf.get_variable('b', dtype = default_dtype, shape = [channels], initializer = b_init, trainable=True)
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
@@ -210,7 +265,7 @@ def kNNGPooling_GUnet(inputs, pos, k, masking = True, channels = 1, W_init = tf.
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
-def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False):
+def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False, act = tf.nn.relu, b_init = None):
 
     with tf.variable_scope(name):
 
@@ -229,13 +284,20 @@ def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, ch
         y = tf.multiply(y, 1.0 / (norm + 1e-3))
         y = tf.reduce_mean(y, axis = -1) # [bs, N]
 
+        # mlp = [C*2]
+        # y = inputs
+        # for l in range(len(mlp)):
+        #     y = Conv1dWrapper(y, mlp[l], 1, 1, 'SAME', act, W_init = W_init, b_init = b_init, name = 'fc%d' % l)
+        # y = Conv1dWrapper(y, 1, 1, 1, 'SAME', tf.nn.tanh, W_init = W_init, b_init = b_init, name = 'fcOut')
+        # y = tf.reshape(y, [bs, N]
+
         # Freq Loss
         print(laplacian.shape)
-        _y = tf.cast(y, tf.float32)
-        norm_Ly = tf.sqrt(tf.reduce_sum(tf.square(tf.matmul(laplacian, tf.reshape(_y, [bs, N, 1]), name = 'L_y')), axis = [1, 2]) + 1e-3)
-        norm_y = tf.sqrt(tf.reduce_sum(tf.square(_y), axis = 1) + 1e-3)
+        norm_Ly = tf.sqrt(tf.reduce_sum(tf.cast(tf.square(tf.matmul(laplacian, tf.reshape(y, [bs, N, 1]), name = 'L_y')), tf.float32), axis = [1, 2]) + 1e-3)
+        norm_y = tf.sqrt(tf.reduce_sum(tf.cast(tf.square(y), tf.float32), axis = 1) + 1e-3)
         freq_loss = norm_Ly / (norm_y + 1e-3) # Maximize this
         freq_loss = 0 - freq_loss # Minimize negate
+        # freq_loss = 0
 
         val, idx = tf.nn.top_k(y, k) # [bs, k]
 
@@ -247,8 +309,9 @@ def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, ch
 
         if masking == True:
             pool_features = tf.multiply(pool_features, tf.reshape(tf.nn.tanh(val), [bs, k, 1]))
+            # pool_features = tf.multiply(pool_features, tf.reshape(val, [bs, k, 1]))
     
-    return pool_position, pool_features, [W], tf.cast(freq_loss, default_dtype)
+    return pool_position, pool_features, y, [W], tf.cast(freq_loss, default_dtype)
 
 def Conv1dWrapper(inputs, filters, kernel_size, stride, padding, act, W_init, b_init, bias = True, name = 'conv'):
 
@@ -294,23 +357,22 @@ def kNNGPosition_refine(input_position, input_feature, act, hidden = 128, W_init
         return refined_pos, [vars1, vars2]
 
 def bip_kNNGConvBN_wrapper(Xs, Ys, kNNIdx, kNNEdg, batch_size, gridMaxSize, particle_hidden_dim, act, decay = 0.999, is_train = True, name = 'gconv', W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0)):
-    
+
     with tf.variable_scope(name):
-        # n, v = kNNGConvLayer_concat(inputs, kNNIdx, kNNEdg, act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
-        n, v = bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        n, v = bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
         n = batch_norm(n, decay, is_train)
-        n = act(n)
+        if act:
+            n = act(n)
 
     return n, v
 
 def kNNGConvBN_wrapper(inputs, kNNIdx, kNNEdg, batch_size, gridMaxSize, particle_hidden_dim, act, decay = 0.999, is_train = True, name = 'gconv', W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0)):
-    
+
     with tf.variable_scope(name):
-        # n, v = kNNGConvLayer_concat(inputs, kNNIdx, kNNEdg, act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
-        # n, v = kNNGConvLayer_edgeMask(inputs, kNNIdx, kNNEdg, act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
-        n, v = bip_kNNGConvLayer_edgeMask(inputs, inputs, kNNIdx, kNNEdg, act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        n, v = bip_kNNGConvLayer_concat(inputs, inputs, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
         n = batch_norm(n, decay, is_train)
-        n = act(n)
+        if act:
+            n = act(n)
 
     return n, v
         
@@ -318,7 +380,7 @@ def kNNGConvBN_wrapper(inputs, kNNIdx, kNNEdg, batch_size, gridMaxSize, particle
 
 class model_particles:
 
-    def __init__(self, gridMaxSize, latent_dim, batch_size, optimizer):
+    def __init__(self, gridMaxSize, latent_dim, batch_size, optimizer, outDim):
         
         # Size of each grid
         self.gridMaxSize = gridMaxSize
@@ -335,6 +397,10 @@ class model_particles:
 
         self.doSim = True
         self.doLoop = True
+        self.loops = 30
+        self.normalize = 1.0
+
+        self.outDim = outDim
 
         # self.act = (lambda x: 0.8518565165255 * tf.exp(-2 * tf.pow(x, 2)) - 1) # normalization constant c = (sqrt(2)*pi^(3/2)) / 3, 0.8518565165255 = c * sqrt(5).
         self.act = tf.nn.elu
@@ -350,9 +416,9 @@ class model_particles:
         # self.total_world_size = 96.0
         self.loss_metric = 'chamfer' # or 'earthmover'
 
-        self.ph_X           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, 7]) # x y z vx vy vz 1
-        self.ph_Y           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, 7])
-        self.ph_L           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, 7]) # Loop simulation (under latent space) ground truth
+        self.ph_X           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, outDim + 1]) # x y z vx vy vz 1
+        self.ph_Y           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, outDim + 1])
+        self.ph_L           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, outDim + 1]) # Loop simulation (under latent space) ground truth
 
         self.ph_card        = tf.placeholder(default_dtype, [self.batch_size]) # card
         self.ph_max_length  = tf.placeholder('int32', [2])
@@ -379,18 +445,27 @@ class model_particles:
             # hd = self.particle_hidden_dim
             # channels = [int(hd / 3.2), hd // 2, hd, int(hd * 1.5), hd * 2]
             
-            blocks = 4
-            particles_count = [2560, 1280, 512, self.cluster_count]
-            conv_count = [3, 2, 3, 2]
-            res_count = [0, 0, 0, 1]
-            kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k]
+            # blocks = 4
+            # particles_count = [self.gridMaxSize, 1280, 512, self.cluster_count]
+            # conv_count = [3, 2, 3, 2]
+            # res_count = [0, 0, 0, 1]
+            # kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k]
+            # hd = self.particle_hidden_dim
+            # channels = [hd // 3, hd // 2, hd, hd * 2]
+
+            blocks = 5
+            particles_count = [self.gridMaxSize, 1920, 768, 300, self.cluster_count]
+            conv_count = [1, 2, 2, 2, 2]
+            res_count = [0, 0, 1, 2, 4]
+            kernel_size = [6, 8, 12, self.knn_k, self.knn_k]
             hd = self.particle_hidden_dim
-            channels = [hd // 3, hd // 2, hd, hd * 2]
+            channels = [16, 32, hd, hd*2, hd*4]
 
             gPos = input_particle[:, :, :3]
-            n = input_particle[:, :, 3:]
+            n = input_particle[:, :, self.outDim:] # Ignore velocity
             var_list = []
             pool_pos = []
+            pool_eval_func = []
             freq_loss = 0
 
             for i in range(blocks):
@@ -400,8 +475,9 @@ class model_particles:
                     # Pooling
                     prev_n = n
                     prev_pos = gPos
-                    gPos, n, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
+                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
                     var_list.append(v)
+                    pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
 
                     pool_pos.append(gPos)
                     freq_loss = freq_loss + fl
@@ -436,9 +512,9 @@ class model_particles:
             var_list.append(v)
             
             if returnPool == True:
-                return gPos, n, var_list, pool_pos, freq_loss
+                return gPos, n, var_list, pool_pos, freq_loss, pool_eval_func
 
-            return gPos, n, var_list, freq_loss
+            return gPos, n, var_list, freq_loss, pool_eval_func
     
     def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, is_train = False, reuse = False):
 
@@ -450,7 +526,7 @@ class model_particles:
         with tf.variable_scope("ParticleDecoder", reuse = reuse) as vs:
  
             CC = local_feature.shape[2]
-            global_latent, v = Conv1dWrapper(local_feature, CC * 4, 1, 1, 'SAME', None, w_init, b_init, True, 'convGlobal')
+            global_latent, v = Conv1dWrapper(local_feature, self.particle_latent_dim, 1, 1, 'SAME', None, w_init, b_init, True, 'convGlobal')
             global_latent = self.combine_method(global_latent, axis = 1)
 
             # Folding stage
@@ -547,11 +623,13 @@ class model_particles:
                 pos, v = kNNGPosition_refine(pos, n, self.act, W_init = w_init_pref, b_init = b_init, name = 'gr%d/grefine/refine' % r)
                 vars_loop.append(v)
 
-            n, _ = Conv1dWrapper(n, output_dim - pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'finalConv')
-            final_particles = tf.concat([pos, n], -1)
+            final_particles = pos
+            if output_dim > pos_range:
+                n, _ = Conv1dWrapper(n, output_dim - pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'finalConv')
+                final_particles = tf.concat([pos, n], -1)
             return 0, [final_particles, fold_before_prefine], 0
 
-    def simulator(self, pos, particles, name = 'Simulator', is_train = True, reuse = False):
+    def simulator(self, pos, particles, name = 'Simluator', is_train = True, reuse = False):
 
         w_init = tf.random_normal_initializer(stddev=self.wdev)
         w_init_pref = tf.random_normal_initializer(stddev=0.03*self.wdev)
@@ -566,10 +644,41 @@ class model_particles:
             C = particles.shape[2]
             var_list = []
 
+            nn = n
+
             for i in range(layers):
-                n, v = kNNGConvBN_wrapper(n, gIdx, gEdg, self.batch_size, Np, C, self.act, is_train = is_train, name = 'simulator/gconv%d' % i, W_init = w_init, b_init = b_init)
+                nn, v = kNNGConvBN_wrapper(nn, gIdx, gEdg, self.batch_size, Np, C, self.act, is_train = is_train, name = 'simulator/gconv%d' % i, W_init = w_init, b_init = b_init, bnact = None)
                 var_list.append(v)
 
+            n = n + nn
+            pos, v = kNNGPosition_refine(pos, n, self.act, W_init = w_init_pref, b_init = b_init, name = 'simulator/grefine')
+            var_list.append(v)
+
+        return pos, particles, var_list
+
+    def simulator_old(self, pos, particles, name = 'Simulator', is_train = True, reuse = False):
+
+        w_init = tf.random_normal_initializer(stddev=self.wdev)
+        w_init_pref = tf.random_normal_initializer(stddev=0.03*self.wdev)
+        b_init = tf.constant_initializer(value=0.0)
+
+        with tf.variable_scope(name, reuse = reuse) as vs:
+            
+            _, gIdx, gEdg = kNNG_gen(pos, self.knn_k, 3, name = 'simulator/ggen')
+            layers = 1
+            n = particles
+            Np = particles.shape[1]
+            C = particles.shape[2]
+            var_list = []
+
+            nn = n
+
+            for i in range(layers):
+                nn, v = kNNGConvBN_wrapper(nn, gIdx, gEdg, self.batch_size, Np, C, self.act, is_train = is_train, name = 'simulator/gconv%d' % i, W_init = w_init, b_init = b_init, bnact = None)
+                # n, v = kNNGConvBN_wrapper(n, gIdx, gEdg, self.batch_size, Np, C, self.act, is_train = is_train, name = 'simulator/gconv%d' % i, W_init = w_init, b_init = b_init)
+                var_list.append(v)
+
+            n = n + nn
             pos, v = kNNGPosition_refine(pos, n, self.act, W_init = w_init_pref, b_init = b_init, name = 'simulator/grefine')
             var_list.append(v)
 
@@ -692,9 +801,9 @@ class model_particles:
 
     def build_network(self, is_train, reuse, loopSim = True, includeSim = True):
 
-        normalized_X = self.ph_X / 48.0
-        normalized_Y = self.ph_Y / 48.0
-        normalized_L = self.ph_L / 48.0
+        normalized_X = self.ph_X / self.normalize
+        normalized_Y = self.ph_Y / self.normalize
+        normalized_L = self.ph_L / self.normalize
        
         # tf.summary.histogram('groundTruth_pos', self.ph_X[:, :, 0:3])
         # tf.summary.histogram('groundTruth_vel', self.ph_X[:, :, 3:6])
@@ -711,7 +820,7 @@ class model_particles:
             floss = 0
 
             # Enc(X)
-            posX, feaX, _v, _floss = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
+            posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
             var_list.append(_v)
             floss += _floss
             encX = tf.concat([posX, feaX], -1)
@@ -719,7 +828,7 @@ class model_particles:
             if includeSim == True:
                 
                 # Enc(Y)
-                posY, feaY, _v, _floss = self.particleEncoder(normalized_Y, self.particle_latent_dim, is_train = is_train, reuse = True)
+                posY, feaY, _v, _floss, eY = self.particleEncoder(normalized_Y, self.particle_latent_dim, is_train = is_train, reuse = True)
                 var_list.append(_v)
                 floss += _floss
                 encY = tf.concat([posY, feaY], -1)
@@ -728,13 +837,15 @@ class model_particles:
                 if loopSim == True:
 
                     # Enc(L)
-                    posL, feaL, _v, _floss = self.particleEncoder(normalized_L, self.particle_latent_dim, is_train = is_train, reuse = True)
+                    posL, feaL, _v, _floss, _ = self.particleEncoder(normalized_L, self.particle_latent_dim, is_train = is_train, reuse = True)
                     var_list.append(_v)
                     floss += _floss
                     encL = tf.concat([posL, feaL], -1)
 
 
             tf.summary.histogram('Clusters X', posX)
+
+            outDim = self.outDim
             
             if includeSim == True:
 
@@ -754,11 +865,8 @@ class model_particles:
                 # Decoders
                 # _, [rec_YX, _], _ = self.particleDecoder(sim_posYX, sim_feaYX, self.ph_card, 6, True, reuse)
                 # _, [ rec_Y, _], _ = self.particleDecoder( sim_posY,  sim_feaY, self.ph_card, 6, True,  True)
-                _, [rec_YX, _], _ = self.particleDecoder( posX, feaX, self.ph_card, 6, True, reuse)
-                _, [ rec_Y, _], _ = self.particleDecoder( posY, feaY, self.ph_card, 6, True,  True)
-
-                rec_YX = rec_YX * 48.0
-                rec_Y  = rec_Y  * 48.0
+                _, [rec_YX, _], _ = self.particleDecoder( posX, feaX, self.ph_card, outDim, True, reuse)
+                _, [ rec_Y, _], _ = self.particleDecoder( posY, feaY, self.ph_card, outDim, True,  True)
 
                 tf.summary.histogram('Reconstructed X (from SInv(Y))', rec_YX[:, :, 0:3])
                 
@@ -766,28 +874,24 @@ class model_particles:
 
                     # SimInv: L -> X
                     sim_posLX, sim_feaLX = posL, feaL
-                    for i in range(5):
+                    for i in range(self.loops):
                         sim_posLX, sim_feaLX, _v = self.simulator(sim_posLX, sim_feaLX, 'Simulator_Inv', is_train, True)
                     
                     # Sim: X -> L
                     sim_posL, sim_feaL = posX, feaX
-                    for i in range(5):
+                    for i in range(self.loops):
                         sim_posL, sim_feaL, _v = self.simulator(sim_posL, sim_feaL, 'Simulator', is_train, True)
                     
                     simL  = tf.concat([ sim_posL,  sim_feaL], -1)
                     simLX = tf.concat([sim_posLX, sim_feaLX], -1)
                     
-                    _, [rec_LX, _], _ = self.particleDecoder(sim_posLX, sim_feaLX, self.ph_card, 6, True,  True)
-                    # _, [ rec_L, _], _ = self.particleDecoder( sim_posL,  sim_feaL, self.ph_card, 6, True,  True)
-                    _, [ rec_L, _], _ = self.particleDecoder( posL,  feaL, self.ph_card, 6, True,  True)
-                    
-                    rec_L  = rec_L  * 48.0
-                    rec_LX = rec_LX * 48.0
+                    _, [rec_LX, _], _ = self.particleDecoder(sim_posLX, sim_feaLX, self.ph_card, outDim, True,  True)
+                    # _, [ rec_L, _], _ = self.particleDecoder( sim_posL,  sim_feaL, self.ph_card, outDim, True,  True)
+                    _, [ rec_L, _], _ = self.particleDecoder( posL,  feaL, self.ph_card, outDim, True,  True)
             
             else:
 
-                _, [rec_X, _], _ = self.particleDecoder(posX, feaX, self.ph_card, 6, True, reuse)
-                rec_X = rec_X * 48.0
+                _, [rec_X, _], _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, True, reuse)
                 tf.summary.histogram('Reconstructed X (from X)', rec_X[:, :, 0:3])
 
         reconstruct_loss = 0.0
@@ -806,14 +910,16 @@ class model_particles:
             # reconstruct_loss += self.chamfer_metric(rec_Y , normalized_Y[:, :, 0:6], 3, self.loss_func)
             # reconstruct_loss += self.chamfer_metric(rec_L , normalized_L[:, :, 0:6], 3, self.loss_func)
             
+            pool_align_loss = 0
+
             if includeSim == True:
 
                 if loopSim == True:
             
-                    reconstruct_loss += self.chamfer_metric(rec_YX, self.ph_X[:, :, 0:6], 3, self.loss_func)
-                    reconstruct_loss += self.chamfer_metric(rec_LX, self.ph_X[:, :, 0:6], 3, self.loss_func)
-                    reconstruct_loss += self.chamfer_metric(rec_Y , self.ph_Y[:, :, 0:6], 3, self.loss_func)
-                    reconstruct_loss += self.chamfer_metric(rec_L , self.ph_L[:, :, 0:6], 3, self.loss_func)
+                    reconstruct_loss += self.chamfer_metric(rec_YX, normalized_X[:, :, 0:outDim], 3, self.loss_func)
+                    reconstruct_loss += self.chamfer_metric(rec_LX, normalized_X[:, :, 0:outDim], 3, self.loss_func)
+                    reconstruct_loss += self.chamfer_metric(rec_Y , normalized_Y[:, :, 0:outDim], 3, self.loss_func)
+                    reconstruct_loss += self.chamfer_metric(rec_L , normalized_L[:, :, 0:outDim], 3, self.loss_func)
 
                     simulation_loss  += self.chamfer_metric(simY , encY, 3, self.loss_func)
                     simulation_loss  += self.chamfer_metric(simL , encL, 3, self.loss_func)
@@ -825,8 +931,8 @@ class model_particles:
 
                 else:
 
-                    reconstruct_loss += self.chamfer_metric(rec_YX, self.ph_X[:, :, 0:6], 3, self.loss_func)
-                    reconstruct_loss += self.chamfer_metric(rec_Y , self.ph_Y[:, :, 0:6], 3, self.loss_func)
+                    reconstruct_loss += self.chamfer_metric(rec_YX, normalized_X[:, :, 0:outDim], 3, self.loss_func)
+                    reconstruct_loss += self.chamfer_metric(rec_Y , normalized_Y[:, :, 0:outDim], 3, self.loss_func)
                     
                     simulation_loss  += self.chamfer_metric(simY , encY, 3, self.loss_func)
                     simulation_loss  += self.chamfer_metric(simYX, encX, 3, self.loss_func)
@@ -834,9 +940,13 @@ class model_particles:
                     reconstruct_loss *= 0.5
                     simulation_loss *= 0.5
 
+                for ei in range(len(eX)):
+                    pool_align_loss += self.chamfer_metric(eX[ei], eY[ei], 3, self.loss_func)
+                pool_align_loss *= 0.25
+
             else:
 
-                reconstruct_loss += self.chamfer_metric(rec_X, self.ph_X[:, :, 0:6], 3, self.loss_func)
+                reconstruct_loss += self.chamfer_metric(rec_X, normalized_X[:, :, 0:outDim], 3, self.loss_func)
 
         hqpool_loss = 0.004 * tf.reduce_mean(floss)
         
@@ -849,8 +959,14 @@ class model_particles:
         particle_net_vars =\
             tl.layers.get_variables_with_name('ParticleEncoder', True, True) +\
             tl.layers.get_variables_with_name('ParticleDecoder', True, True) 
+        
+        # rec_L  = rec_L  * self.normalize
+        # rec_LX = rec_LX * self.normalize
+        # rec_X = rec_X * self.normalize
+        # rec_YX = rec_YX * self.normalize
+        # rec_Y  = rec_Y  * self.normalize
 
-        return reconstruct_loss, simulation_loss, hqpool_loss, particle_net_vars
+        return reconstruct_loss, simulation_loss, hqpool_loss, pool_align_loss, particle_net_vars
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
@@ -867,11 +983,11 @@ class model_particles:
             floss = 0
 
             # Enc(X)
-            posX, feaX, _v, _floss = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
+            posX, feaX, _v, _floss, evals = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
             var_list.append(_v)
             floss += _floss
 
-        return posX, feaX
+        return posX, feaX, evals
     
     # Only simulates posX & feaX for a single step
     def build_predict_Sim(self, pos, fea, is_train = False, reuse = False):
@@ -883,13 +999,13 @@ class model_particles:
         return sim_posY, sim_feaY
 
     # Decodes Y
-    def build_predict_Dec(self, pos, fea, gt, is_train = False, reuse = False):
+    def build_predict_Dec(self, pos, fea, gt, is_train = False, reuse = False, outDim = 6):
 
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
-            _, [rec, _], _ = self.particleDecoder(pos, fea, self.ph_card, 6, is_train, reuse)
+            _, [rec, _], _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train, reuse)
 
-        rec = rec * 48.0
+        rec = rec * self.normalize
         reconstruct_loss = self.chamfer_metric(rec, gt, 3, self.loss_func)
 
         return rec, reconstruct_loss
@@ -897,7 +1013,7 @@ class model_particles:
     def build_model(self):
 
         # Train & Validation
-        self.train_particleRecLoss, self.train_particleSimLoss, self.train_HQPLoss,\
+        self.train_particleRecLoss, self.train_particleSimLoss, self.train_HQPLoss, self.train_PALoss,\
         self.particle_vars =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
@@ -907,7 +1023,7 @@ class model_particles:
         # self.train_particleLoss = self.train_particleCardLoss
         # self.val_particleLoss = self.val_particleCardLoss
 
-        self.train_particleLoss = self.train_particleRecLoss + self.train_particleSimLoss + self.train_HQPLoss
+        self.train_particleLoss = self.train_particleRecLoss + self.train_particleSimLoss + self.train_HQPLoss + self.train_PALoss
         # self.train_particleLoss = self.train_particleCardLoss + 100 * self.train_particleRawLoss
         # self.val_particleLoss = self.val_particleRawLoss
         # self.val_particleLoss = self.val_particleCardLoss + 100 * self.val_particleRawLoss

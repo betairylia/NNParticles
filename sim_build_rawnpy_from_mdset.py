@@ -9,21 +9,23 @@ import random
 import progressbar
 
 FILE_PATH = 'MDSets/2560_BigGrid/'
-outpath = '/mnt/Datasets/MDSets/LSsim_combined_2560_nonstop/'
+# outpath = '/mnt/Datasets/MDSets/LSsim_combined_2560_nonstop/'
 # outpath = 'MDSets/LSsim_combined_2560_tst/'
 # outpath = 'MDSets/LSsim_combined_2560_validation_ss600/'
+# outpath = '/media/betairya/Data Disk/Datasets/MDSet_sim_5_loop30/'
+outpath = 'MDSets/sim_100_val/ss400'
 maxParticlesPerGrid = 2560
 
-start_step = 0
-singlefile_sim_count = 64
-combines = 2
+start_step = 400
+singlefile_sim_count = 1
+combines = 1
 
-single_sim_steps = 10
-long_sim_loops = 5
+single_sim_steps = 100
+long_sim_loops = 1
 
-maxtotalfiles = 1000
-shuffle_steps = True
-skip_steps = False
+maxtotalfiles = 1
+shuffle_steps = False
+skip_steps = True
 
 if not os.path.exists(outpath):
     os.makedirs(outpath)
@@ -211,6 +213,15 @@ simsteps = simsteps // ss
 readcnt = 0
 fcnt = 0
 
+print("Total #Files = %4d, Checking file count..." % totalCount)
+assert totalCount % singlefile_sim_count == 0
+
+print("Checking combines...")
+assert singlefile_sim_count % combines == 0
+
+print("Legal simulation steps count = %d, Checking..." % simsteps)
+assert simsteps % singlefile_sim_count == 0
+
 for i in range(npyCount):
     
     available_sims = min(singlefile_sim_count, totalCount - (i * singlefile_sim_count))
@@ -225,6 +236,7 @@ for i in range(npyCount):
             break
 
         file_contents.append(read_file_override(files[fidx]))
+        # file_contents.append({})
         readcnt += 1
         print("Read %d / %d" % (readcnt, totalCount))
 
@@ -239,22 +251,32 @@ for i in range(npyCount):
     for idxidx in range(available_sims):
         random.shuffle(indices[idxidx])
     
+    # print(indices)
+    # input('')
+
     # Build array
     for j in range(available_sims // combines):
 
+        # print('j %2d' % j)
         particle_array = [np.zeros([simsteps, 3, maxParticlesPerGrid, 6]) for c in range(combines)]
         
         for c in range(combines):
 
+            # print('c %2d' % c)
+                
             for k in range(available_sims):
                 cur_file_content = file_contents[indices[j*combines+c][k]]
+                # print('j*c+c = \t%4d' % (j*combines+c))
+                # print('fsims = \t%4d' % file_sim_step)
+                # print(cur_file_content['steporder'][((j*combines+c)*file_sim_step):((j*combines+c+1)*file_sim_step)])
+                # input('')
                 order = np.asarray(cur_file_content['steporder'][((j*combines+c)*file_sim_step):((j*combines+c+1)*file_sim_step)])
                 order_Y = order + single_sim_steps
                 order_L = order + (long_sim_loops * single_sim_steps)
                 particle_array[c][(k*file_sim_step):((k+1)*file_sim_step), 0, :, :] = cur_file_content['data'][order, 0, :, 0:6]
                 particle_array[c][(k*file_sim_step):((k+1)*file_sim_step), 1, :, :] = cur_file_content['data'][order_Y, 0, :, 0:6]
                 particle_array[c][(k*file_sim_step):((k+1)*file_sim_step), 2, :, :] = cur_file_content['data'][order_L, 0, :, 0:6]
-        
+
         final_arr = np.concatenate(particle_array, axis = 0)
         np.save(os.path.join(outpath, 'combined_%d.npy' % fcnt), final_arr)
         print("Output file %s" % ('combined_%d.npy' % fcnt))

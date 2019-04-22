@@ -41,6 +41,7 @@ parser.add_argument('-zdim', '--latent-dim', type = int, default = 512, help = "
 parser.add_argument('-hdim', '--hidden-dim', type = int, default = 64, help = "Length of the hidden vector inside network")
 parser.add_argument('-cdim', '--cluster-dim', type = int, default = 128, help = "How many neighbors should be considered in the graph network")
 parser.add_argument('-ccnt', '--cluster-count', type = int, default = 256, help = "How many neighbors should be considered in the graph network")
+parser.add_argument('-odim', '--output-dim', type = int, default = 6, help = "What kind of data should we output?")
 parser.add_argument('-knnk', '--nearest-neighbor', type = int, default = 16, help = "How many neighbors should be considered in the graph network")
 parser.add_argument('-loop', '--loop-sim', type = int, default = 5, help = "Loop simulation sim count")
 
@@ -59,7 +60,8 @@ parser.add_argument('-name', '--name', type = str, default = "NoName", help = "N
 parser.add_argument('-save', '--save', type = str, default = "None", help = "Path to store trained model")
 parser.add_argument('-load', '--load', type = str, default = "None", help = "File to load to continue training")
 parser.add_argument('-debug', '--debug', dest = "enable_debug", action = 'store_const', default = False, const = True, help = "Enable debugging")
-parser.add_argument('-prof', '--profile', type = str, default = "None", help = "Path to store profiling timeline (at step 100)")
+parser.add_argument('-prof', '--profile', dest = "profile", action = 'store_const', default = False, const = True, help = "Enable profiling (at step 10)")
+# parser.add_argument('-prof', '--profile', type = str, default = "None", help = "Path to store profiling timeline (at step 100)")
 
 args = parser.parse_args()
 
@@ -93,7 +95,7 @@ if args.dtype == tf.float16:
     os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
 
 # model = model_net(16, args.latent_dim, args.batch_size, optimizer)
-model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer)
+model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim)
 model.particle_hidden_dim = args.hidden_dim
 model.loss_func = args.loss_func
 model.combine_method = args.combine_method
@@ -102,6 +104,7 @@ model.cluster_feature_dim = args.cluster_dim
 model.cluster_count = args.cluster_count
 model.doSim = args.dosim
 model.doLoop = args.dosim and args.doloop
+model.loops = args.loop_sim
 
 # Headers
 # headers = dataLoad.read_file_header(dataLoad.get_fileNames(args.datapath)[0])
@@ -119,6 +122,7 @@ ptraprs = tf.summary.scalar('Particle Reconstruct Loss', model.train_particleRec
 ptrapss = tf.summary.scalar('Particle Simulation Loss', model.train_particleSimLoss)
 # vals = tf.summary.scalar('Validation Loss', model.val_particleLoss)
 ptrapfs = tf.summary.scalar('Particle HQPool Loss', model.train_HQPLoss)
+ptrapps = tf.summary.scalar('Particle Pool Align Loss', model.train_PALoss)
 
 # merged_train = tf.summary.merge([ptraps, ptraprs, ptrapcs, tps, tls])
 # merged_val = tf.summary.merge([vals])
@@ -129,9 +133,11 @@ config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 sess = tf.Session(config = config)
 
-if args.profile != "None":
-    run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-    run_metadata = tf.RunMetadata()
+if args.profile:
+    builder = tf.profiler.ProfileOptionBuilder
+    prof_opts = builder(builder.time_and_memory()).order_by('micros').build()
+    # run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+    # run_metadata = tf.RunMetadata()
 
 if args.enable_debug:
     sess = tf_debug.LocalCLIDebugWrapperSession(sess)
@@ -178,20 +184,40 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
     # Train
     for _x, _x_size in epoch_train:
         
-        if batch_idx_train == 10 and args.profile != "None":
+        if batch_idx_train == 10 and args.profile:
             print(colored("Profiling in progress...", 'yellow'))
-            feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
-            _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict, options = run_options, run_metadata = run_metadata)
-            train_writer.add_summary(summary, batch_idx_train)
-            batch_idx_train += 1
 
-            fetched_timeline = timeline.Timeline(run_metadata.step_stats)
-            chrome_trace = fetched_timeline.generate_chrome_trace_format()
-            with open (os.path.join('profiles/', args.profile + '.json'), 'w') as f:
-                f.write(chrome_trace)
+            with tf.contrib.tfprof.ProfileContext('prof/%s' % args.name, trace_steps = [], dump_steps = []) as pctx:
+                if args.dosim and args.doloop:
+                    feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+                elif args.dosim:
+                    feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+                else:
+                    feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+
+                pctx.trace_next_step()
+                pctx.dump_next_step()
+
+                _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict) #, options = run_options, run_metadata = run_metadata)
+                train_writer.add_summary(summary, batch_idx_train)
+                batch_idx_train += 1
+
+                pctx.profiler.profile_operations(options = prof_opts)
+
+                # fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                # chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                # with open (os.path.join('profiles/', args.profile + '.json'), 'w') as f:
+                    # f.write(chrome_trace)
         
         else:
-            feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+            
+            if args.dosim and args.doloop:
+                feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+            elif args.dosim:
+                feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+            else:
+                feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+
             _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict)
             train_writer.add_summary(summary, batch_idx_train)
             batch_idx_train += 1

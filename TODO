@@ -1,0 +1,17 @@
+*** Done ***
+Weight masking - soft position bins - This is too expensive so give up. I just realized that the cost is ultra high
+Better memory management to handle 5120 pts - Done ! BatchSize 16 with FP16 worked.
+
+*** ToDo ***
+Spatial-Temporal k-NN graphs (latent space)
+LSTM / GRU Simlator
+
+*** Memo ***
+Evaluation:
+-- FOR AUTO-ENCODER PAPER
+ShapeNet CC - MAIN Focusing
+Fluid dynamics
+LJP dynamics
+-- FOR SIMULATOR AND AE
+QM9 Dataset
+
