@@ -5,6 +5,8 @@ Better memory management to handle 5120 pts - Done ! BatchSize 16 with FP16 work
 *** ToDo ***
 Spatial-Temporal k-NN graphs (latent space)
 LSTM / GRU Simlator
+Weight norm?
+Better convolution sturcutre. omg.
 
 *** Memo ***
 Evaluation:

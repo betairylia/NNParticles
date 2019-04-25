@@ -125,7 +125,7 @@ def gen_batch_predict(content, batch_size, currentStep, step_count):
     batch_idx = 0
     yield batch_X, batch_Y, batch_Y_size
 
-def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True):
+def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True, dim = 0):
 
     files = get_fileNames(path)
     # for i in range(len(files)):
@@ -139,6 +139,7 @@ def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True):
             content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[1], 'dim': data.shape[2]}
         else:
             content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[2], 'dim': data.shape[3]}
+        if dim > 0: content['dim'] = dim
         # content = read_file(files[0], step_count * vM)
         yield gen_batch(content, batch_size, vM, is_Train = True, shuffle = shuffle), gen_batch(content, batch_size, vM, is_Train = False, shuffle = shuffle)
 

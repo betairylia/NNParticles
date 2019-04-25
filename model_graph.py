@@ -21,7 +21,9 @@ from time import gmtime, strftime
 
 default_dtype = tf.float32
 
-def batch_norm(inputs, decay, is_train):
+def batch_norm(inputs, decay, is_train, name):
+
+    decay = 0.965
 
     # if default_dtype == tf.float32:
     #     return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
@@ -29,7 +31,10 @@ def batch_norm(inputs, decay, is_train):
     #     return BatchNormalizationF16(momentum = decay)(inputs, training = is_train)
    
     # return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
-    return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, fused = True)
+    # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, fused = True)
+    # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, scope = name, fused = True)
+    return tf.contrib.layers.layer_norm(inputs, scope = name)
+    # return tf.contrib.layers.group_norm(inputs, 
 
 # Laplacian is always FP32
 def Laplacian(bs, N, k, kNNIdx, name = 'kNNG_laplacian'):
@@ -212,7 +217,7 @@ def bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.
 
     return res, [W_neighbor, b_neighbor] # [bs, Nx, channels]
 
-def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, kernel_size, no_act_final = False, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
+def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_final = False, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
 
     with tf.variable_scope(name):
 
@@ -224,14 +229,32 @@ def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, kernel_siz
         k = kNNIdx.shape[2]
         eC = kNNEdg.shape[3]
 
-        # weight weights
-        raise NotImplementedError
+        W_edge = tf.get_variable('W_edge', dtype = default_dtype, shape = [1, 1, eC, channels], initializer = W_init, trainable = True)
+        b_edge = tf.get_variable('b_edge', dtype = default_dtype, shape = [channels], initializer = b_init, trainable = True)
+
+        mask = tf.nn.conv2d(kNNEdg, W_edge, [1, 1, 1, 1], padding = 'SAME')
+        mask = tf.nn.bias_add(mask, b_edge)
+        mask = tf.nn.sigmoid(mask)
 
         neighbors = tf.gather_nd(Ys, kNNIdx)
+        # neighbors: Edge u-v = [u;v;edg]
+        neighbors = tf.concat([neighbors, tf.broadcast_to(tf.reshape(Xs, [bs, Nx, 1, Cx]), [bs, Nx, k, Cx]), kNNEdg], axis = -1) # [bs, Nx, k, Cx+Cy+eC]
 
-        # candidate weights
-        W_candidate = tf.get_variable('W', dtype = default_dtype, shape = [kernel_size, Cy + eC, channels], initializer = W_init, trainable = True)
-        b = tf.get_variable('b', dtype = default_dtype, shape = [channels], initializer = b_init, trainable=True)
+        ### Do the convolution ###
+
+        # Collect neightbors ("M" stage)
+        W_neighbor = tf.get_variable('W_neighbor', dtype = default_dtype, shape = [1, 1, Cx+Cy+eC, channels], initializer = W_init, trainable=True)
+        b_neighbor = tf.get_variable('b_neighbor', dtype = default_dtype, shape = [channels], initializer = b_init, trainable=True)
+
+        res = tf.nn.conv2d(neighbors, W_neighbor, [1, 1, 1, 1], padding = 'SAME')
+        res = tf.multiply(res, mask)
+        res = tf.reduce_sum(res, axis = 2) # combine_method?
+        # res = tf.add_n(tf.unstack(res, axis = 2)) # combine_method? # nearly the same performance
+        res = tf.nn.bias_add(res, b_neighbor)
+
+        if act:
+            res = act(res)
+    return res, [W_edge, b_edge, W_neighbor, b_neighbor]
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
@@ -280,16 +303,16 @@ def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, ch
         W = tf.get_variable('W', dtype = default_dtype, shape = [1, C, channels], initializer=W_init, trainable=True)
         norm = tf.sqrt(tf.reduce_sum(tf.square(W), axis = 1, keepdims = True)) # [1, 1, channels]
         
-        y = tf.nn.conv1d(inputs, W, 1, padding = 'SAME') # [bs, N, channels]
-        y = tf.multiply(y, 1.0 / (norm + 1e-3))
-        y = tf.reduce_mean(y, axis = -1) # [bs, N]
+        # y = tf.nn.conv1d(inputs, W, 1, padding = 'SAME') # [bs, N, channels]
+        # y = tf.multiply(y, 1.0 / (norm + 1e-3))
+        # y = tf.reduce_mean(y, axis = -1) # [bs, N]
 
-        # mlp = [C*2]
-        # y = inputs
-        # for l in range(len(mlp)):
-        #     y = Conv1dWrapper(y, mlp[l], 1, 1, 'SAME', act, W_init = W_init, b_init = b_init, name = 'fc%d' % l)
-        # y = Conv1dWrapper(y, 1, 1, 1, 'SAME', tf.nn.tanh, W_init = W_init, b_init = b_init, name = 'fcOut')
-        # y = tf.reshape(y, [bs, N]
+        mlp = [C*2]
+        y = inputs
+        for l in range(len(mlp)):
+            y, _ = Conv1dWrapper(y, mlp[l], 1, 1, 'SAME', act, W_init = W_init, b_init = b_init, name = 'fc%d' % l)
+        y, _ = Conv1dWrapper(y, 1, 1, 1, 'SAME', tf.nn.tanh, W_init = W_init, b_init = b_init, name = 'fcOut')
+        y = tf.reshape(y, [bs, N])
 
         # Freq Loss
         print(laplacian.shape)
@@ -359,8 +382,10 @@ def kNNGPosition_refine(input_position, input_feature, act, hidden = 128, W_init
 def bip_kNNGConvBN_wrapper(Xs, Ys, kNNIdx, kNNEdg, batch_size, gridMaxSize, particle_hidden_dim, act, decay = 0.999, is_train = True, name = 'gconv', W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0)):
 
     with tf.variable_scope(name):
-        n, v = bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
-        n = batch_norm(n, decay, is_train)
+        n, v = bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        # n, v = bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        # n, v = bip_kNNGConvLayer_concatMLP(Xs, Ys, kNNIdx, kNNEdg, act = act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        n = batch_norm(n, decay, is_train, name = 'bn')
         if act:
             n = act(n)
 
@@ -369,8 +394,10 @@ def bip_kNNGConvBN_wrapper(Xs, Ys, kNNIdx, kNNEdg, batch_size, gridMaxSize, part
 def kNNGConvBN_wrapper(inputs, kNNIdx, kNNEdg, batch_size, gridMaxSize, particle_hidden_dim, act, decay = 0.999, is_train = True, name = 'gconv', W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0)):
 
     with tf.variable_scope(name):
-        n, v = bip_kNNGConvLayer_concat(inputs, inputs, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
-        n = batch_norm(n, decay, is_train)
+        n, v = bip_kNNGConvLayer_edgeMask(inputs, inputs, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        # n, v = bip_kNNGConvLayer_concat(inputs, inputs, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        # n, v = bip_kNNGConvLayer_concatMLP(inputs, inputs, kNNIdx, kNNEdg, act = act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        n = batch_norm(n, decay, is_train, name = 'bn')
         if act:
             n = act(n)
 
@@ -445,21 +472,58 @@ class model_particles:
             # hd = self.particle_hidden_dim
             # channels = [int(hd / 3.2), hd // 2, hd, int(hd * 1.5), hd * 2]
             
-            # blocks = 4
-            # particles_count = [self.gridMaxSize, 1280, 512, self.cluster_count]
-            # conv_count = [3, 2, 3, 2]
-            # res_count = [0, 0, 0, 1]
-            # kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k]
-            # hd = self.particle_hidden_dim
-            # channels = [hd // 3, hd // 2, hd, hd * 2]
-
-            blocks = 5
-            particles_count = [self.gridMaxSize, 1920, 768, 300, self.cluster_count]
-            conv_count = [1, 2, 2, 2, 2]
-            res_count = [0, 0, 1, 2, 4]
-            kernel_size = [6, 8, 12, self.knn_k, self.knn_k]
+            # LJP 2560
+            blocks = 4
+            particles_count = [self.gridMaxSize, 1280, 512, self.cluster_count]
+            conv_count = [3, 2, 2, 2]
+            res_count = [0, 0, 1, 1]
+            kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k]
             hd = self.particle_hidden_dim
-            channels = [16, 32, hd, hd*2, hd*4]
+            channels = [hd // 3, hd // 2, hd, hd * 2]
+            
+            # LJP shallow
+            # blocks = 3
+            # particles_count = [self.gridMaxSize, 768, self.cluster_count]
+            # conv_count = [2, 3, 2]
+            # res_count = [0, 0, 1]
+            # kernel_size = [self.knn_k, self.knn_k, self.knn_k]
+            # hd = self.particle_hidden_dim
+            # channels = [hd // 2, hd, hd * 2]
+
+            # Test
+            # blocks = 2
+            # particles_count = [self.gridMaxSize, self.cluster_count]
+            # conv_count = [3, 2]
+            # res_count = [0, 0]
+            # kernel_size = [self.knn_k, self.knn_k]
+            # hd = self.particle_hidden_dim
+            # channels = [hd, hd]
+
+            # blocks = 5
+            # particles_count = [self.gridMaxSize, 1024, 512, 256, self.cluster_count]
+            # conv_count = [1, 2, 2, 2, 2]
+            # res_count = [0, 0, 1, 1, 2]
+            # kernel_size = [6, 8, 12, self.knn_k, self.knn_k]
+            # hd = self.particle_hidden_dim
+            # channels = [16, 32, hd, hd*2, hd*4]
+
+            # ShapeNet_NEWconvConcat and Fluid_NEWconvConcat
+            # blocks = 5
+            # particles_count = [self.gridMaxSize, 1920, 768, 256, self.cluster_count]
+            # conv_count = [2, 3, 2, 2, 2]
+            # res_count = [0, 0, 1, 2, 2]
+            # kernel_size = [6, 8, 12, self.knn_k, self.knn_k]
+            # hd = self.particle_hidden_dim
+            # channels = [16, 32, hd, hd*2, hd*4]
+
+            # ShapeNet_shallow_uniform_NEWconvConcat
+            # blocks = 3
+            # particles_count = [self.gridMaxSize, 1920, self.cluster_count]
+            # conv_count = [2, 3, 2]
+            # res_count = [0, 0, 1]
+            # kernel_size = [self.knn_k // 2, self.knn_k, self.knn_k]
+            # hd = self.particle_hidden_dim
+            # channels = [hd // 2, hd, hd*2]
 
             gPos = input_particle[:, :, :3]
             n = input_particle[:, :, self.outDim:] # Ignore velocity
@@ -475,7 +539,7 @@ class model_particles:
                     # Pooling
                     prev_n = n
                     prev_pos = gPos
-                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
+                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = False)
                     var_list.append(v)
                     pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
 
@@ -484,23 +548,23 @@ class model_particles:
 
                     # Collect features after pool
                     _, _, bpIdx, bpEdg = bip_kNNG_gen(gPos, prev_pos, kernel_size[i], 3, name = 'gpool%d/ggen' % i)
-                    n, _ = bip_kNNGConvBN_wrapper(n, prev_n, bpIdx, bpEdg, self.batch_size, particles_count[i], channels[i], self.act, is_train = True, W_init = w_init, b_init = b_init, name = 'gpool%d/gconv' % i)
+                    n, _ = bip_kNNGConvBN_wrapper(n, prev_n, bpIdx, bpEdg, self.batch_size, particles_count[i], channels[i], self.act, is_train = is_train, W_init = w_init, b_init = b_init, name = 'gpool%d/gconv' % i)
 
                 gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen%d' % i)
                 MatL, MatA, MatD = Laplacian(self.batch_size, particles_count[i], kernel_size[i], gIdx, name = 'gLaplacian%d' % i)
 
                 for c in range(conv_count[i]):
 
-                    n, v = kNNGConvBN_wrapper(n, gIdx, gEdg, self.batch_size, particles_count[i], channels[i], self.act, 0.999, is_train = True, W_init = w_init, b_init = b_init, name = 'g%d/gconv%d' % (i, c))
+                    n, v = kNNGConvBN_wrapper(n, gIdx, gEdg, self.batch_size, particles_count[i], channels[i], self.act, 0.999, is_train = is_train, W_init = w_init, b_init = b_init, name = 'g%d/gconv%d' % (i, c))
                     var_list.append(v)
 
                 tmp = n
                 for r in range(res_count[i]):
                 
-                    nn, v = kNNGConvBN_wrapper(n, gIdx, gEdg, self.batch_size, particles_count[i], channels[i], self.act, 0.999, is_train = True, W_init = w_init, b_init = b_init, name = 'g%d/res%d/conv1' % (i, r))
+                    nn, v = kNNGConvBN_wrapper(n, gIdx, gEdg, self.batch_size, particles_count[i], channels[i], self.act, 0.999, is_train = is_train, W_init = w_init, b_init = b_init, name = 'g%d/res%d/conv1' % (i, r))
                     var_list.append(v)
                     
-                    nn, v = kNNGConvBN_wrapper(nn, gIdx, gEdg, self.batch_size, particles_count[i], channels[i], self.act, 0.999, is_train = True, W_init = w_init, b_init = b_init, name = 'g%d/res%d/conv2' % (i, r))
+                    nn, v = kNNGConvBN_wrapper(nn, gIdx, gEdg, self.batch_size, particles_count[i], channels[i], self.act, 0.999, is_train = is_train, W_init = w_init, b_init = b_init, name = 'g%d/res%d/conv2' % (i, r))
                     var_list.append(v)
                     n = n + nn
                 
@@ -519,6 +583,7 @@ class model_particles:
     def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, is_train = False, reuse = False):
 
         w_init = tf.random_normal_initializer(stddev=self.wdev)
+        w_init_fold = tf.random_normal_initializer(stddev= 1.0*self.wdev)
         w_init_pref = tf.random_normal_initializer(stddev=0.03*self.wdev)
         b_init = tf.constant_initializer(value=0.0)
         g_init = tf.random_normal_initializer(1., 0.02)
@@ -537,7 +602,10 @@ class model_particles:
 
             # generate random noise
             pos_range = 3
-            z = tf.random.normal([self.batch_size, fold_particles_count, pos_range], dtype = default_dtype)
+            # use gaussian for fluid
+            # z = tf.random.normal([self.batch_size, fold_particles_count, self.particle_latent_dim * 2], dtype = default_dtype)
+            # but uniform should be way better
+            z = tf.random.uniform([self.batch_size, fold_particles_count, self.particle_latent_dim * 2], minval = -1., maxval = 1., dtype = default_dtype)
 
             # conditional generative network (FOLD Stage)
             latents = \
@@ -554,8 +622,8 @@ class model_particles:
             global_fold = 3
             for i in range(global_fold):
 
-                c, v = Conv1dWrapper(c, self.particle_hidden_dim, 1, 1, 'SAME', None, w_init, b_init, True, 'fold/fc%d' % i)
-                c = batch_norm(c, 0.999, is_train)
+                c, v = Conv1dWrapper(c, self.particle_hidden_dim, 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fold/fc%d' % i)
+                c = batch_norm(c, 0.999, is_train, name = 'fold/fc%d/bn' % i)
                 c = self.act(c)
 
             alter_particles, v = Conv1dWrapper(c, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'fold/fc_out')
@@ -577,7 +645,7 @@ class model_particles:
             convSteps = 3
             varsGConv = []
             for i in range(convSteps):
-                n, v = bip_kNNGConvBN_wrapper(n, local_feature, gp_idx, gp_edg, self.batch_size, fold_particles_count, self.particle_hidden_dim // 2, self.act, is_train = True, name = 'gconv%d_pre' % i, W_init = w_init)
+                n, v = bip_kNNGConvBN_wrapper(n, local_feature, gp_idx, gp_edg, self.batch_size, fold_particles_count, self.particle_hidden_dim // 2, self.act, is_train = is_train, name = 'gconv%d_pre' % i, W_init = w_init)
                 varsGConv.append(v)
        
             fold_particle_features = n
@@ -592,6 +660,7 @@ class model_particles:
             n = tf.concat([ref_particle_features, fold_particle_features], axis = 1) # [bs, N, phd]
 
             # Position Refinement
+            # refine_loops = 0
             refine_loops = 2
             refine_res_blocks = 2
             vars_loop = []
@@ -647,7 +716,7 @@ class model_particles:
             nn = n
 
             for i in range(layers):
-                nn, v = kNNGConvBN_wrapper(nn, gIdx, gEdg, self.batch_size, Np, C, self.act, is_train = is_train, name = 'simulator/gconv%d' % i, W_init = w_init, b_init = b_init, bnact = None)
+                nn, v = kNNGConvBN_wrapper(nn, gIdx, gEdg, self.batch_size, Np, C, self.act, is_train = is_train, name = 'simulator/gconv%d' % i, W_init = w_init, b_init = b_init)
                 var_list.append(v)
 
             n = n + nn
@@ -770,7 +839,8 @@ class model_particles:
         # NOTE: current using position (0:3) only here for searching nearest point.
         row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, N, 1, pos_range])
         col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, N, pos_range])
-        distance = tf.sqrt(tf.reduce_sum(tf.square(tf.subtract(row_predicted, col_groundtru)), axis = -1))
+        # distance = tf.norm(row_predicted - col_groundtru, ord = 'euclidean', axis = -1)
+        distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
         
         rearrange_predicted_N = tf.argmin(distance, axis = 1, output_type = tf.int32)
         rearrange_groundtru_N = tf.argmin(distance, axis = 2, output_type = tf.int32)
@@ -865,7 +935,7 @@ class model_particles:
                 # Decoders
                 # _, [rec_YX, _], _ = self.particleDecoder(sim_posYX, sim_feaYX, self.ph_card, 6, True, reuse)
                 # _, [ rec_Y, _], _ = self.particleDecoder( sim_posY,  sim_feaY, self.ph_card, 6, True,  True)
-                _, [rec_YX, _], _ = self.particleDecoder( posX, feaX, self.ph_card, outDim, True, reuse)
+                _, [rec_YX, fold_X], _ = self.particleDecoder( posX, feaX, self.ph_card, outDim, True, reuse)
                 _, [ rec_Y, _], _ = self.particleDecoder( posY, feaY, self.ph_card, outDim, True,  True)
 
                 tf.summary.histogram('Reconstructed X (from SInv(Y))', rec_YX[:, :, 0:3])
@@ -891,7 +961,7 @@ class model_particles:
             
             else:
 
-                _, [rec_X, _], _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, True, reuse)
+                _, [rec_X, fold_X], _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, True, reuse)
                 tf.summary.histogram('Reconstructed X (from X)', rec_X[:, :, 0:3])
 
         reconstruct_loss = 0.0
@@ -926,8 +996,8 @@ class model_particles:
                     simulation_loss  += self.chamfer_metric(simYX, encX, 3, self.loss_func)
                     simulation_loss  += self.chamfer_metric(simLX, encX, 3, self.loss_func)
 
-                    reconstruct_loss *= 0.25
-                    simulation_loss *= 0.25
+                    reconstruct_loss *= 10.0
+                    simulation_loss *= 10.0
 
                 else:
 
@@ -937,18 +1007,22 @@ class model_particles:
                     simulation_loss  += self.chamfer_metric(simY , encY, 3, self.loss_func)
                     simulation_loss  += self.chamfer_metric(simYX, encX, 3, self.loss_func)
             
-                    reconstruct_loss *= 0.5
-                    simulation_loss *= 0.5
+                    reconstruct_loss *= 20.0
+                    simulation_loss *= 20.0
 
                 for ei in range(len(eX)):
                     pool_align_loss += self.chamfer_metric(eX[ei], eY[ei], 3, self.loss_func)
-                pool_align_loss *= 0.25
+                pool_align_loss *= 10.0 / len(eX)
 
             else:
 
                 reconstruct_loss += self.chamfer_metric(rec_X, normalized_X[:, :, 0:outDim], 3, self.loss_func)
+                reconstruct_loss *= 40.0
+        
+        # reconstruct_loss += self.chamfer_metric(fold_X[:, :, 0:3], normalized_X[:, :, 0:3], 3, self.loss_func) * 40.0
+        # reconstruct_loss *= 0.5
 
-        hqpool_loss = 0.004 * tf.reduce_mean(floss)
+        hqpool_loss = 0.01 * tf.reduce_mean(floss)
         
         if includeSim == True:
             hqpool_loss *= 0.5
@@ -1003,12 +1077,12 @@ class model_particles:
 
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
-            _, [rec, _], _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train, reuse)
+            _, [rec, rec_f], _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train, reuse)
 
-        rec = rec * self.normalize
-        reconstruct_loss = self.chamfer_metric(rec, gt, 3, self.loss_func)
+        rec = rec
+        reconstruct_loss = self.chamfer_metric(rec, gt, 3, self.loss_func) * 40.0
 
-        return rec, reconstruct_loss
+        return rec * self.normalize, rec_f * self.normalize, reconstruct_loss
 
     def build_model(self):
 

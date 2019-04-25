@@ -54,6 +54,7 @@ def read_file_override(filename, vM = 1.0):
                 arr = lines[l].split(' ')[0][1:-1]
                 pos_arr = arr.split(',')
                 file_content['data'][s, p, 0:3] = np.asarray([float(pos_arr[0]), float(pos_arr[1]), float(pos_arr[2])])
+                l += 1
             l += 1
             bar.update(s)
     
@@ -69,6 +70,7 @@ def read_file_override(filename, vM = 1.0):
                 arr = lines[l].split(']')[0][1:]
                 vel_arr = arr.split(',')
                 file_content['data'][s, p, 3:6] = np.asarray([float(vel_arr[0]), float(vel_arr[1]), float(vel_arr[2])])
+                l += 1
             l += 1
             bar.update(s + step_count)
 

@@ -35,7 +35,8 @@ parser.add_argument('-ep', '--epochs', type = int, default = 20)
 parser.add_argument('-bs', '--batch-size', type = int, default = 16)
 parser.add_argument('-vLen', '--voxel-length', type = int, default = 96, help = "Size of voxel (0 to use voxel length stored in file)")
 parser.add_argument('-vSize', '--voxel-size', type = int, default = 2560, help = "Max amount of particles in a voxel")
-parser.add_argument('-vm', '--velocity-multiplier', type = float, default = 1.0, help = "Multiplies the velocity by this factor")
+parser.add_argument('-vm', '--velocity-multiplier', type = float, default = 1.0, help = "Multiplies the velocity (input[..., 3:]) by this factor")
+parser.add_argument('-norm', '--normalize', type = float, default = 1.0, help = "stddev of input data")
 
 parser.add_argument('-zdim', '--latent-dim', type = int, default = 512, help = "Length of the latent vector")
 parser.add_argument('-hdim', '--hidden-dim', type = int, default = 64, help = "Length of the hidden vector inside network")
@@ -105,6 +106,7 @@ model.cluster_count = args.cluster_count
 model.doSim = args.dosim
 model.doLoop = args.dosim and args.doloop
 model.loops = args.loop_sim
+model.normalize = args.normalize
 
 # Headers
 # headers = dataLoad.read_file_header(dataLoad.get_fileNames(args.datapath)[0])
@@ -176,7 +178,7 @@ maxl_array[1] = args.voxel_size
 epCount = dataLoad.fileCount(args.datapath)
 stepFactor = 9
 
-for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier):
+for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim):
 
     epoch_idx += 1
     print(colored("Epoch %03d" % (epoch_idx), 'yellow'))
@@ -224,7 +226,7 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
 
-        if batch_idx_train % 3000 == 0:
+        if batch_idx_train % (20000 // args.batch_size) == 0:
             save_path = saver.save(sess, "savedModels/" + args.save + ".ckpt", global_step = batch_idx_train)
             print("Checkpoint saved in %s" % (save_path))
 
