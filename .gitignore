@@ -129,3 +129,4 @@ MDSets/
 *.grbin
 prof*/
 Sim_Reconstruction/
+*.swp
