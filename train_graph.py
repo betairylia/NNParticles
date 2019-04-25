@@ -164,13 +164,12 @@ save_path = "savedModels/" + args.name + "/"
 # Save & Load
 saver = tf.train.Saver()
 
-if args.load != "None":
-    saver.restore(sess, args.load)
-
 if args.load == "auto" or args.load == "Auto":
     latest_ckpt = tf.train.latest_checkpoint(save_path)
     if latest_ckpt is not None:
         saver.restore(sess, latest_ckpt)
+elif args.load != "None":
+    saver.restore(sess, args.load)
 
 batch_idx_train = 0
 batch_idx_test = 0
