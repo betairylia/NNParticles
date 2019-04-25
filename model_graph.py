@@ -473,13 +473,13 @@ class model_particles:
             # channels = [int(hd / 3.2), hd // 2, hd, int(hd * 1.5), hd * 2]
             
             # LJP 2560
-            blocks = 4
-            particles_count = [self.gridMaxSize, 1280, 512, self.cluster_count]
-            conv_count = [3, 2, 2, 2]
-            res_count = [0, 0, 1, 1]
-            kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k]
-            hd = self.particle_hidden_dim
-            channels = [hd // 3, hd // 2, hd, hd * 2]
+            # blocks = 4
+            # particles_count = [self.gridMaxSize, 1280, 512, self.cluster_count]
+            # conv_count = [3, 2, 2, 2]
+            # res_count = [0, 0, 1, 1]
+            # kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k]
+            # hd = self.particle_hidden_dim
+            # channels = [hd // 3, hd // 2, hd, hd * 2]
             
             # LJP shallow
             # blocks = 3
@@ -525,6 +525,15 @@ class model_particles:
             # hd = self.particle_hidden_dim
             # channels = [hd // 2, hd, hd*2]
 
+            # ShapeNet_deep_uniform_edgeMask
+            blocks = 5
+            particles_count = [self.gridMaxSize, 1920, 768, 256, self.cluster_count]
+            conv_count = [4, 2, 0, 0, 0]
+            res_count = [0, 0, 1, 2, 2]
+            kernel_size = [self.knn_k // 2, self.knn_k, self.knn_k, self.knn_k, self.knn_k]
+            hd = self.particle_hidden_dim
+            channels = [hd // 2, int(hd / 1.4), hd, int(hd * 1.5), hd * 2]
+            
             gPos = input_particle[:, :, :3]
             n = input_particle[:, :, self.outDim:] # Ignore velocity
             var_list = []

@@ -159,11 +159,18 @@ val_writer = tf.summary.FileWriter(logPath + '/validation', sess.graph)
 sess.run(tf.local_variables_initializer())
 tl.layers.initialize_global_variables(sess)
 
+save_path = "savedModels/" + args.name + "/"
+
 # Save & Load
 saver = tf.train.Saver()
 
 if args.load != "None":
     saver.restore(sess, args.load)
+
+if args.load == "auto" or args.load == "Auto":
+    latest_ckpt = tf.train.latest_checkpoint(save_path)
+    if latest_ckpt is not None:
+        saver.restore(sess, latest_ckpt)
 
 batch_idx_train = 0
 batch_idx_test = 0
@@ -226,8 +233,8 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
 
-        if batch_idx_train % (20000 // args.batch_size) == 0:
-            save_path = saver.save(sess, "savedModels/" + args.save + ".ckpt", global_step = batch_idx_train)
+        if batch_idx_train % (15000 // args.batch_size) == 0:
+            save_path = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
             print("Checkpoint saved in %s" % (save_path))
 
     # Test
