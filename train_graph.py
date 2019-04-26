@@ -58,7 +58,7 @@ parser.add_argument('-nsim', '--no-sim', dest = 'dosim', action='store_const', d
 
 parser.add_argument('-log', '--log', type = str, default = "logs", help = "Path to log dir")
 parser.add_argument('-name', '--name', type = str, default = "NoName", help = "Name to show on tensor board")
-parser.add_argument('-save', '--save', type = str, default = "None", help = "Path to store trained model")
+parser.add_argument('-save', '--save', type = str, default = "model", help = "Path to store trained model")
 parser.add_argument('-load', '--load', type = str, default = "None", help = "File to load to continue training")
 parser.add_argument('-debug', '--debug', dest = "enable_debug", action = 'store_const', default = False, const = True, help = "Enable debugging")
 parser.add_argument('-prof', '--profile', dest = "profile", action = 'store_const', default = False, const = True, help = "Enable profiling (at step 10)")
@@ -160,6 +160,8 @@ sess.run(tf.local_variables_initializer())
 tl.layers.initialize_global_variables(sess)
 
 save_path = "savedModels/" + args.name + "/"
+if not os.path.exists(save_path):
+    os.makedirs(save_path)
 
 # Save & Load
 saver = tf.train.Saver()
@@ -168,6 +170,7 @@ if args.load == "auto" or args.load == "Auto":
     latest_ckpt = tf.train.latest_checkpoint(save_path)
     if latest_ckpt is not None:
         saver.restore(sess, latest_ckpt)
+        print("Check point loaded: %s" % latest_ckpt)
 elif args.load != "None":
     saver.restore(sess, args.load)
 
@@ -232,9 +235,9 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
 
-        if batch_idx_train % (15000 // args.batch_size) == 0:
-            save_path = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
-            print("Checkpoint saved in %s" % (save_path))
+        if batch_idx_train % (16000 // args.batch_size) == 0:
+            sav = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
+            print("Checkpoint saved in %s" % (sav))
 
     # Test
     # for _x, _x_size in epoch_validate:
