@@ -79,8 +79,6 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
         Cy = Ys.shape[2]
         k = min(Ny, k)
 
-        print("bip-kNNG-gen: %4d -> %4d, kernel = %3d" % (Nx, Ny, k))
-
         posX = Xs[:, :, :pos_range]
         posY = Ys[:, :, :pos_range]
         drow = tf.cast(tf.reshape(posX, [bs, Nx, 1, pos_range]), tf.float16) # duplicate for row
@@ -214,8 +212,8 @@ def bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.
         b_neighbor = tf.get_variable('b_neighbor', dtype = default_dtype, shape = [channels], initializer = b_init, trainable=True)
 
         res = tf.nn.conv2d(neighbors, W_neighbor, [1, 1, 1, 1], padding = 'SAME')
-        # res = tf.reduce_max(res, axis = 2) # combine_method?
-        res = tf.reduce_sum(res, axis = 2) # combine_method?
+        res = tf.reduce_max(res, axis = 2) # combine_method?
+        # res = tf.reduce_sum(res, axis = 2) # combine_method?
         # res = tf.add_n(tf.unstack(res, axis = 2)) # combine_method? # nearly the same performance
         res = tf.nn.bias_add(res, b_neighbor)
 
@@ -223,37 +221,6 @@ def bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.
             res = act(res)
 
     return res, [W_neighbor, b_neighbor] # [bs, Nx, channels]
-
-def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
-    
-    with tf.variable_scope(name):
-
-        bs = Xs.shape[0]
-        Nx = Xs.shape[1]
-        Ny = Ys.shape[1]
-        Cx = Xs.shape[2]
-        Cy = Ys.shape[2]
-        k = kNNIdx.shape[2]
-        eC = kNNEdg.shape[3]
-
-        neighbors = tf.gather_nd(Ys, kNNIdx)
-        # neighbors: Edge u-v = [u;v;edg]
-        neighbors = tf.concat([neighbors, kNNEdg], axis = -1) # [bs, Nx, k, Cx+Cy+eC]
-
-        ### Do the convolution ###
-        mlp = [channels * 2, channels * 2]
-        n = neighbors
-        for i in range(len(mlp)):
-            n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = tf.nn.elu, scope = 'mlp%d' % i)
-        n = tf.contrib.layers.conv2d(n, channels * 2, [1, 1], padding = 'SAME', activation_fn = tf.nn.sigmoid, scope = 'mlp_out')
-        n = tf.reduce_mean(n, axis = 2)
-        
-        _act = act
-        if _act is None:
-            _act = tf.identity
-        n = tf.contrib.layers.conv1d(n, channels, [1], padding = 'SAME', activation_fn = _act, scope = 'conv')
-
-    return n, [] # [bs, Nx, channels]
 
 def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_final = False, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
 
@@ -326,6 +293,58 @@ def kNNGPooling_GUnet(inputs, pos, k, masking = True, channels = 1, W_init = tf.
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
+def kNNGPooling_CAHQ(inputs, pos, knnIdx, knnEdg, k, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False, act = tf.nn.relu, b_init = None):
+
+    with tf.variable_scope(name):
+
+        bs = inputs.shape[0]
+        N = inputs.shape[1]
+        C = inputs.shape[2]
+        k = min(N, k)
+
+        if stopGradient == True:
+            inputs = tf.stop_gradient(inputs)
+
+        raise NotImplementedError
+
+        W = tf.get_variable('W', dtype = default_dtype, shape = [1, C, channels], initializer=W_init, trainable=True)
+        norm = tf.sqrt(tf.reduce_sum(tf.square(W), axis = 1, keepdims = True)) # [1, 1, channels]
+        
+        # y = tf.nn.conv1d(inputs, W, 1, padding = 'SAME') # [bs, N, channels]
+        # y = tf.multiply(y, 1.0 / (norm + 1e-3))
+        # y = tf.reduce_mean(y, axis = -1) # [bs, N]
+
+        mlp = [C*2]
+        y = inputs
+        for l in range(len(mlp)):
+            y, _ = Conv1dWrapper(y, mlp[l], 1, 1, 'SAME', act, W_init = W_init, b_init = b_init, name = 'fc%d' % l)
+        y, _ = Conv1dWrapper(y, 1, 1, 1, 'SAME', tf.nn.tanh, W_init = W_init, b_init = b_init, name = 'fcOut')
+        y = tf.reshape(y, [bs, N])
+
+        # Freq Loss
+        print(laplacian.shape)
+        norm_Ly = tf.sqrt(tf.reduce_sum(tf.cast(tf.square(tf.matmul(laplacian, tf.reshape(y, [bs, N, 1]), name = 'L_y')), tf.float32), axis = [1, 2]) + 1e-3)
+        norm_y = tf.sqrt(tf.reduce_sum(tf.cast(tf.square(y), tf.float32), axis = 1) + 1e-3)
+        freq_loss = norm_Ly / (norm_y + 1e-3) # Maximize this
+        freq_loss = 0 - freq_loss # Minimize negate
+        # freq_loss = 0
+
+        val, idx = tf.nn.top_k(y, k) # [bs, k]
+
+        # Pick them
+        batches = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, k])
+        gather_idx = tf.stack([batches, idx], axis = -1)
+        pool_features = tf.gather_nd(inputs, gather_idx) # [bs, k, C]
+        pool_position = tf.gather_nd(pos, gather_idx) # [bs, k, 3]
+
+        if masking == True:
+            pool_features = tf.multiply(pool_features, tf.reshape(tf.nn.tanh(val), [bs, k, 1]))
+            # pool_features = tf.multiply(pool_features, tf.reshape(val, [bs, k, 1]))
+    
+    return pool_position, pool_features, y, [W], tf.cast(freq_loss, default_dtype)
+
+# Inputs: [bs, N, C]
+#    Pos: [bs, N, 3]
 def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False, act = tf.nn.relu, b_init = None):
 
     with tf.variable_scope(name):
@@ -337,6 +356,13 @@ def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, ch
 
         if stopGradient == True:
             inputs = tf.stop_gradient(inputs)
+
+        # Fuse freq features
+        fuse_freq = tf.get_variable('freq', dtype = default_dtype, shape = [2], trainable = True, initializer = tf.ones_initializer)
+        fuse_1 = tf.math.sin(pos * fuse_freq[0])
+        fuse_2 = tf.math.sin(pos * fuse_freq[1])
+        tf.summary.scalar('Fuse_freq', fuse_freq[0])
+        inputs = tf.concat([inputs, fuse_1, fuse_2], axis = -1)
 
         W = tf.get_variable('W', dtype = default_dtype, shape = [1, C, channels], initializer=W_init, trainable=True)
         norm = tf.sqrt(tf.reduce_sum(tf.square(W), axis = 1, keepdims = True)) # [1, 1, channels]
@@ -420,13 +446,11 @@ def kNNGPosition_refine(input_position, input_feature, act, hidden = 128, W_init
 def bip_kNNGConvBN_wrapper(Xs, Ys, kNNIdx, kNNEdg, batch_size, gridMaxSize, particle_hidden_dim, act, decay = 0.999, is_train = True, name = 'gconv', W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0)):
 
     with tf.variable_scope(name):
-        n, v = bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
-        # n, v = bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        n, v = bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
         # n, v = bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
         # n, v = bip_kNNGConvLayer_concatMLP(Xs, Ys, kNNIdx, kNNEdg, act = act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
         
         if False:
-        # if True:
             ch = particle_hidden_dim
             mlp = [ch * 2, ch * 2, ch]
             vs = []
@@ -570,15 +594,6 @@ class model_particles:
             # hd = self.particle_hidden_dim
             # channels = [hd // 2, hd, hd*2]
             
-            # ShapeNet_shallow_feature
-            blocks = 3
-            particles_count = [self.gridMaxSize, 1920, self.cluster_count]
-            conv_count = [2, 2, 1]
-            res_count = [0, 0, 1]
-            kernel_size = [self.knn_k * 2, self.knn_k * 4, self.knn_k * 4]
-            hd = self.particle_hidden_dim
-            channels = [hd // 8, hd // 4, hd // 3]
-            
             # ShapeNet_shallow_uniform_convConcatSimpleMLP
             # blocks = 3
             # particles_count = [self.gridMaxSize, 1920, self.cluster_count]
@@ -587,15 +602,6 @@ class model_particles:
             # kernel_size = [self.knn_k, self.knn_k, self.knn_k]
             # hd = self.particle_hidden_dim
             # channels = [hd // 2, hd, hd*2]
-            
-            # ShapeNet_deepshallow_uniform_convConcatSimpleMLP
-            # blocks = 7
-            # particles_count = [self.gridMaxSize, 2560, 1280, 512, 256, 128, self.cluster_count]
-            # conv_count = [2, 1, 1, 1, 0, 0, 0]
-            # res_count = [0, 0, 0, 0, 1, 1, 2]
-            # kernel_size = [self.knn_k for i in range(7)]
-            # hd = self.particle_hidden_dim
-            # channels = [hd // 2, hd // 2, hd, hd, hd, hd * 2, hd * 2]
 
             # ShapeNet_deep_uniform_edgeMask
             # blocks = 5
@@ -606,8 +612,34 @@ class model_particles:
             # hd = self.particle_hidden_dim
             # channels = [hd // 2, int(hd / 1.4), hd, int(hd * 1.5), hd * 2]
             
+            # ShapeNet_deepshallow_uniform_edgeMask
+            blocks = 7
+            particles_count = [self.gridMaxSize, 2560, 1280, 512, 256, 128, self.cluster_count]
+            conv_count = [2, 1, 1, 1, 0, 0, 0]
+            res_count = [0, 0, 0, 0, 1, 1, 2]
+            kernel_size = [self.knn_k for i in range(7)]
+            hd = self.particle_hidden_dim
+            channels = [hd // 2, hd // 2, hd, hd, hd, hd * 2, hd * 2]
+            
+            # ShapeNet_shallowest
+            # blocks = 2
+            # particles_count = [self.gridMaxSize, self.cluster_count]
+            # conv_count = [1, 3]
+            # res_count = [0, 0]
+            # kernel_size = [self.knn_k, 1]
+            # bik = [0, 96]
+            # hd = self.particle_hidden_dim
+            # channels = [hd // 2, hd*2]
+            
+            try:
+                bik
+            except NameError:
+                bik = kernel_size
+
             gPos = input_particle[:, :, :3]
+            # sPos = gPos
             n = input_particle[:, :, self.outDim:] # Ignore velocity
+            # sn = n
             var_list = []
             pool_pos = []
             pool_eval_func = []
@@ -620,7 +652,7 @@ class model_particles:
                     # Pooling
                     prev_n = n
                     prev_pos = gPos
-                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = False)
+                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
                     var_list.append(v)
                     pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
 
@@ -628,7 +660,7 @@ class model_particles:
                     freq_loss = freq_loss + fl
 
                     # Collect features after pool
-                    _, _, bpIdx, bpEdg = bip_kNNG_gen(gPos, prev_pos, (kernel_size[i] // 2) * (particles_count[i-1] // particles_count[i]), 3, name = 'gpool%d/ggen' % i)
+                    _, _, bpIdx, bpEdg = bip_kNNG_gen(gPos, prev_pos, bik[i], 3, name = 'gpool%d/ggen' % i)
                     n, _ = bip_kNNGConvBN_wrapper(n, prev_n, bpIdx, bpEdg, self.batch_size, particles_count[i], channels[i], self.act, is_train = is_train, W_init = w_init, b_init = b_init, name = 'gpool%d/gconv' % i)
 
                 gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen%d' % i)
@@ -655,7 +687,7 @@ class model_particles:
             # tf.summary.histogram('Pooled_clusters_pos', gPos)
             n, v = Conv1dWrapper(n, self.cluster_feature_dim, 1, 1, 'SAME', None, w_init, b_init, True, 'convOut')
             var_list.append(v)
-            
+ 
             if returnPool == True:
                 return gPos, n, var_list, pool_pos, freq_loss, pool_eval_func
 
@@ -689,8 +721,7 @@ class model_particles:
                 # use gaussian for fluid
                 # z = tf.random.normal([self.batch_size, fold_particles_count, self.particle_latent_dim * 2], dtype = default_dtype)
                 # but uniform should be way better
-                # z = tf.random.uniform([self.batch_size, fold_particles_count, self.particle_latent_dim * 2], minval = -1., maxval = 1., dtype = default_dtype)
-                z = tf.random.uniform([self.batch_size, fold_particles_count, 3], minval = -1., maxval = 1., dtype = default_dtype)
+                z = tf.random.uniform([self.batch_size, fold_particles_count, self.particle_latent_dim * 2], minval = -1., maxval = 1., dtype = default_dtype)
 
                 # conditional generative network (FOLD Stage)
                 latents = \
@@ -791,7 +822,7 @@ class model_particles:
                 pcnt = [self.gridMaxSize] # particle count
                 generator = [4] # Generator depth
                 refine = [0] # refine steps (each refine step = 1x res block (2x gconv))
-                hdim = [self.particle_hidden_dim]
+                hdim = [self.particle_hidden_dim // 2]
                 fdim = [self.particle_latent_dim] # dim of features used for folding
                 knnk = [self.knn_k]
 
@@ -950,6 +981,104 @@ class model_particles:
             var_list.append(v)
 
         return pos, particles, var_list
+    
+    def localGAN_D(self, feed, cond, is_train, name = 'localDiscriminator', reuse = False):
+
+        N = feed.shape[0]
+        H = feed.shape[1]
+        W = feed.shape[2]
+        C = feed.shape[3]
+
+        # mlp = [8, 8, 8]
+        mlp = [128, 128, 128]
+        fuse = 1
+
+        with tf.variable_scope(name, reuse = reuse):
+            n = feed
+            for i in range(len(mlp)):
+                
+                if i == fuse:
+                    n = tf.concat([n, cond], axis = -1)
+
+                n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = None, scope = 'conv%d' % i)
+                # n = batch_norm(n, 0.999, is_train, name = 'bn%d' % i)
+                n = self.act(n)
+            n = tf.contrib.layers.conv2d(n, 1, [1, 1], padding = 'SAME', activation_fn = None, scope = 'convEnd')
+            # n = tf.reshape(n, [N, H, W])
+
+        return tf.nn.sigmoid(n), n
+
+    def build_localGAN(self, truePos, fakePos, clusPos, clusFea, clusSize = 96, is_train = False, reuse = False):
+
+        bs = clusPos.shape[0]
+        ccnt = clusPos.shape[1]
+        prange = clusPos.shape[2]
+        cdim = clusFea.shape[2]
+
+        # Create batches for localGAN
+        _, _, lgIdx_r, _ = bip_kNNG_gen(clusPos, truePos, clusSize, prange, 'lGAN_real_bgen')
+        _, _, lgIdx_f, _ = bip_kNNG_gen(clusPos, fakePos, clusSize, prange, 'lGAN_fake_bgen')
+
+        lgBatch_cpos = tf.broadcast_to(tf.reshape(clusPos, [bs, ccnt, 1, prange]), [bs, ccnt, clusSize, prange])
+        lgBatch_real = tf.gather_nd(truePos, lgIdx_r) - lgBatch_cpos       # [bs, ccnt, csize, pr]
+        lgBatch_fake = tf.gather_nd(fakePos, lgIdx_f) - lgBatch_cpos       # [bs, ccnt, csize, pr]
+        lgBatch_cond = tf.broadcast_to(tf.reshape(clusFea, [bs, ccnt, 1, cdim]), [bs, ccnt, clusSize, cdim]) # [bs, ccnt, csize, cdim]
+
+        # lgBatch_real = tf.random.normal([self.batch_size, self.cluster_count, clusSize, 3])
+        # lgBatch_fake = tf.random.normal([self.batch_size, self.cluster_count, clusSize, 3]) + 10.0
+        # lgBatch_cond = tf.zeros([self.batch_size, self.cluster_count, clusSize, 16])
+
+        # lgBatch_real = tf.concat([lgBatch_real, lgBatch_cond], axis = -1)
+        # lgBatch_fake = tf.concat([lgBatch_fake, lgBatch_cond], axis = -1)
+
+        mode = 'vanilla'
+        # mode = 'wasserstein'
+
+        tf.summary.histogram('real_batches', lgBatch_real)
+        tf.summary.histogram('fake_batches', lgBatch_fake)
+        
+        if mode == 'vanilla':
+            d_real, logits_real = self.localGAN_D(lgBatch_real, lgBatch_cond, is_train, 'GAN_D', reuse)
+            d_fake, logits_fake = self.localGAN_D(lgBatch_fake, lgBatch_cond, is_train, 'GAN_D', True)
+
+            eplison = 1e-3
+            d_loss_real = -tf.reduce_mean(tf.log(d_real + eplison))
+            d_loss_fake = -tf.reduce_mean(tf.log(1 - d_fake + eplison))
+            d_loss = d_loss_real + d_loss_fake
+            g_loss = -tf.reduce_mean(d_fake + eplison)
+
+            return d_loss, g_loss, d_loss_real
+        
+        if mode == 'wasserstein':
+            _, d_real = self.localGAN_D(lgBatch_real, lgBatch_cond, is_train, 'GAN_D', reuse)
+            _, d_fake = self.localGAN_D(lgBatch_fake, lgBatch_cond, is_train, 'GAN_D', True)
+
+            d_loss_real = - tf.reduce_mean(d_real)
+            d_loss_fake =   tf.reduce_mean(d_fake)
+            g_loss      = - d_loss_fake
+
+            N = lgBatch_real.shape[0]
+            H = lgBatch_real.shape[1]
+            W = lgBatch_real.shape[2]
+            C = lgBatch_real.shape[3]
+
+            # GP
+            alpha = tf.random.uniform([N, H, W, tf.constant(1)], minval = 0., maxval = 1.)
+            diff  = lgBatch_fake - lgBatch_real
+            inter = tf.add(lgBatch_real, (alpha * diff), name = 'GP_interpolate')
+            _, li = self.localGAN_D(inter, lgBatch_cond, is_train, 'GAN_D', True)
+            grad  = tf.gradients(li, [inter], name = 'GP_gradient')[0]
+            norms = tf.norm(grad, axis = -1)
+            GP    = 0
+
+            if False: #LP
+                GP = tf.reduce_mean(tf.nn.relu(norms - 1.) ** 2, name = 'LP_loss')
+            else:
+                GP = tf.reduce_mean((norms - 1.) ** 2, name = 'GP_loss')
+
+            d_loss = d_loss_real + d_loss_fake
+            d_loss = d_loss + 1000. * GP
+            return d_loss, g_loss, d_loss_real
 
     def generate_match_canonical(self, card):
 
@@ -1222,6 +1351,9 @@ class model_particles:
 
         hqpool_loss = 0.01 * tf.reduce_mean(floss)
         # hqpool_loss = 0.0
+
+        # GAN Loss
+        d_loss, g_loss, d_loss_real = self.build_localGAN(normalized_X[:, :, 0:3], rec_X[:, :, 0:3], posX, feaX, 96, is_train, False)
         
         if includeSim == True:
             hqpool_loss *= 0.5
@@ -1239,7 +1371,7 @@ class model_particles:
         # rec_YX = rec_YX * self.normalize
         # rec_Y  = rec_Y  * self.normalize
 
-        return reconstruct_loss, simulation_loss, hqpool_loss, pool_align_loss, particle_net_vars
+        return reconstruct_loss, simulation_loss, hqpool_loss, pool_align_loss, particle_net_vars, d_loss, g_loss, d_loss_real
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
@@ -1287,7 +1419,7 @@ class model_particles:
 
         # Train & Validation
         self.train_particleRecLoss, self.train_particleSimLoss, self.train_HQPLoss, self.train_PALoss,\
-        self.particle_vars =\
+        self.particle_vars, self.d_loss, self.g_loss, self.d_loss_real =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
         # self.val_particleRawLoss, self.val_particleCardLoss, _, _, _ =\
@@ -1296,14 +1428,23 @@ class model_particles:
         # self.train_particleLoss = self.train_particleCardLoss
         # self.val_particleLoss = self.val_particleCardLoss
 
-        self.train_particleLoss = self.train_particleRecLoss + self.train_particleSimLoss + self.train_HQPLoss + self.train_PALoss
+        self.train_particleLoss = self.train_particleRecLoss + self.train_particleSimLoss + self.train_HQPLoss + self.train_PALoss + self.g_loss + self.d_loss_real
+        # self.train_particleLoss = self.train_particleSimLoss + self.train_HQPLoss + self.train_PALoss + self.g_loss + self.d_loss_real
         # self.train_particleLoss = self.train_particleCardLoss + 100 * self.train_particleRawLoss
         # self.val_particleLoss = self.val_particleRawLoss
         # self.val_particleLoss = self.val_particleCardLoss + 100 * self.val_particleRawLoss
 
+        d_vars = tf.trainable_variables(scope = 'GAN_D')
+        g_vars = [item for item in tf.trainable_variables() if item not in d_vars]
+
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            self.train_op = self.optimizer.minimize(self.train_particleLoss)
-        
+            self.train_op = self.optimizer.minimize(self.train_particleLoss, var_list = g_vars)
+        with tf.control_dependencies(update_ops):
+            self.d_train_op = tf.train.AdamOptimizer().minimize(self.d_loss, var_list = d_vars)
+       
+        print(d_vars)
+        print(g_vars)
+
         # self.train_op = self.optimizer.minimize(self.train_particleLoss, var_list = self.particle_vars)
         # self.train_op = tf.constant(0, shape=[10, 10])
