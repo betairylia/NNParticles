@@ -338,6 +338,13 @@ def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, ch
         if stopGradient == True:
             inputs = tf.stop_gradient(inputs)
 
+        # Fuse freq features
+        fuse_freq = tf.get_variable('freq', dtype = default_dtype, shape = [2], trainable = True, initializer = tf.ones_initializer)
+        fuse_1 = tf.math.sin(pos * fuse_freq[0])
+        fuse_2 = tf.math.sin(pos * fuse_freq[1])
+        tf.summary.scalar('Fuse_freq', fuse_freq[0])
+        inputs = tf.concat([inputs, fuse_1, fuse_2], axis = -1)
+
         W = tf.get_variable('W', dtype = default_dtype, shape = [1, C, channels], initializer=W_init, trainable=True)
         norm = tf.sqrt(tf.reduce_sum(tf.square(W), axis = 1, keepdims = True)) # [1, 1, channels]
         
@@ -575,7 +582,8 @@ class model_particles:
             particles_count = [self.gridMaxSize, 1920, self.cluster_count]
             conv_count = [2, 2, 1]
             res_count = [0, 0, 1]
-            kernel_size = [self.knn_k * 2, self.knn_k * 4, self.knn_k * 4]
+            kernel_size = [self.knn_k * 2, self.knn_k * 4, self.knn_k * 2]
+            bik = [16, 32, 64]
             hd = self.particle_hidden_dim
             channels = [hd // 8, hd // 4, hd // 3]
             
@@ -605,6 +613,11 @@ class model_particles:
             # kernel_size = [self.knn_k // 2, self.knn_k, self.knn_k, self.knn_k, self.knn_k]
             # hd = self.particle_hidden_dim
             # channels = [hd // 2, int(hd / 1.4), hd, int(hd * 1.5), hd * 2]
+
+            try:
+                bik
+            except NameError:
+                bik = kernel_size
             
             gPos = input_particle[:, :, :3]
             n = input_particle[:, :, self.outDim:] # Ignore velocity
@@ -620,7 +633,7 @@ class model_particles:
                     # Pooling
                     prev_n = n
                     prev_pos = gPos
-                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = False)
+                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
                     var_list.append(v)
                     pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
 
@@ -628,7 +641,7 @@ class model_particles:
                     freq_loss = freq_loss + fl
 
                     # Collect features after pool
-                    _, _, bpIdx, bpEdg = bip_kNNG_gen(gPos, prev_pos, (kernel_size[i] // 2) * (particles_count[i-1] // particles_count[i]), 3, name = 'gpool%d/ggen' % i)
+                    _, _, bpIdx, bpEdg = bip_kNNG_gen(gPos, prev_pos, bik[i], 3, name = 'gpool%d/ggen' % i)
                     n, _ = bip_kNNGConvBN_wrapper(n, prev_n, bpIdx, bpEdg, self.batch_size, particles_count[i], channels[i], self.act, is_train = is_train, W_init = w_init, b_init = b_init, name = 'gpool%d/gconv' % i)
 
                 gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen%d' % i)
