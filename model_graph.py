@@ -245,9 +245,9 @@ def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf
         # neighbors: Edge u-v = [u;v;edg]
         # neighbors = tf.concat([neighbors, kNNEdg], axis = -1) # [bs, Nx, k, Cx+Cy+eC]
 
-        fCh = 2
+        fCh = 6
         if channels > 32:
-            fCh = 3
+            fCh = 12
 
         ### Do the convolution ###
         mlp = [channels]
@@ -839,7 +839,7 @@ class model_particles:
                 blocks = 1
                 pcnt = [self.gridMaxSize] # particle count
                 generator = [4] # Generator depth
-                refine = [2] # refine steps (each refine step = 1x res block (2x gconv))
+                refine = [0] # refine steps (each refine step = 1x res block (2x gconv))
                 hdim = [self.particle_hidden_dim // 2]
                 fdim = [self.particle_latent_dim] # dim of features used for folding
                 knnk = [self.knn_k // 2]
