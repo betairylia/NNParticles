@@ -349,6 +349,61 @@ def kNNGPooling_GUnet(inputs, pos, k, masking = True, channels = 1, W_init = tf.
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
+def kNNGPooling_CAHQ(inputs, pos, k, kNNIdx, kNNEdg, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False, act = tf.nn.relu, b_init = None):
+
+    with tf.variable_scope(name):
+
+        bs = inputs.shape[0]
+        N = inputs.shape[1]
+        C = inputs.shape[2]
+        k = min(N, k)
+
+        if stopGradient == True:
+            inputs = tf.stop_gradient(inputs)
+
+        kNNEdg_dist = tf.norm(kNNEdg, axis = -1)
+        imp = tf.contrib.layers.conv1d(inputs, 1, 1, padding = 'SAME', activation_fn = tf.nn.tanh, scope = 'importance')
+
+        layers = 4
+        f = imp
+        for i in range(layers):
+            tmp = f
+            f = tf.gather_nd(f, kNNIdx)
+            f = tf.concat([f, kNNEdg_dist], axis = -1) # [bs, N, k, 2]
+            f = tf.contrib.layers.conv2d(f, 16, 1, padding = 'SAME', scope = 'mlp%d/h1' % i)
+            f = tf.contrib.layers.conv2d(f, 1,  1, padding = 'SAME', scope = 'mlp%d/h2' % i) # [bs, N, k, 1]
+            f = tf.reduce_mean(f, axis = 2) # [bs, N, 1]
+            f = tf.contrib.layers.conv1d(f, 16, 1, padding = 'SAME', scope = 'mlp%d/ro/h1' % i)
+            f = tf.contrib.layers.conv1d(f, 1,  1, padding = 'SAME', scope = 'mlp%d/ro/h2' % i)
+            f = batch_norm(f, 0.999, is_train, 'mlp%d/bn' % i)
+            f = f + tmp
+
+        y = tf.reshape(f, [bs, N])
+
+        # Freq Loss
+        print(laplacian.shape)
+        norm_Ly = tf.sqrt(tf.reduce_sum(tf.cast(tf.square(tf.matmul(laplacian, tf.reshape(y, [bs, N, 1]), name = 'L_y')), tf.float32), axis = [1, 2]) + 1e-3)
+        norm_y = tf.sqrt(tf.reduce_sum(tf.cast(tf.square(y), tf.float32), axis = 1) + 1e-3)
+        freq_loss = norm_Ly / (norm_y + 1e-3) # Maximize this
+        freq_loss = 0 - freq_loss # Minimize negate
+        # freq_loss = 0
+
+        val, idx = tf.nn.top_k(y, k) # [bs, k]
+
+        # Pick them
+        batches = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, k])
+        gather_idx = tf.stack([batches, idx], axis = -1)
+        pool_features = tf.gather_nd(inputs, gather_idx) # [bs, k, C]
+        pool_position = tf.gather_nd(pos, gather_idx) # [bs, k, 3]
+
+        if masking == True:
+            # pool_features = tf.multiply(pool_features, tf.reshape(tf.nn.tanh(val), [bs, k, 1]))
+            pool_features = tf.multiply(pool_features, tf.reshape(val, [bs, k, 1]))
+    
+    return pool_position, pool_features, y, [W], tf.cast(freq_loss, default_dtype)
+
+# Inputs: [bs, N, C]
+#    Pos: [bs, N, 3]
 def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False, act = tf.nn.relu, b_init = None):
 
     with tf.variable_scope(name):
@@ -669,7 +724,8 @@ class model_particles:
                     # Pooling
                     prev_n = n
                     prev_pos = gPos
-                    gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
+                    # gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
+                    gPos, n, eval_func, v, fl = kNNGPooling_CAHQ(n, gPos, particles_count[i], gIdx, gEdg, MatL, masking = True, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
                     var_list.append(v)
                     pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
 
