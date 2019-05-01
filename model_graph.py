@@ -110,10 +110,11 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
         neighbor_pos = tf.cast(tf.gather_nd(local_pos, gather_lpos_indices), default_dtype) # [bs, Nx, k, 3]
 
         # [xx, xy, xz, yx, yy, yz, zx, zy, zz], 2nd order moment
-        neighbor_pos_rs = tf.reshape(neighbor_pos, [bs, Nx, k, 3, 1])
-        neighbor_quadratic = tf.reshape(tf.multiply(neighbor_pos_rs, tf.transpose(neighbor_pos_rs, perm = [0, 1, 2, 4, 3])), [bs, Nx, k, 9])
+        # neighbor_pos_rs = tf.reshape(neighbor_pos, [bs, Nx, k, 3, 1])
+        # neighbor_quadratic = tf.reshape(tf.multiply(neighbor_pos_rs, tf.transpose(neighbor_pos_rs, perm = [0, 1, 2, 4, 3])), [bs, Nx, k, 9])
 
-        kNNEdg = tf.concat([kNNEdg, neighbor_pos, neighbor_quadratic], axis = -1) # [bs, Nx, k, eC]
+        kNNEdg = tf.concat([neighbor_pos], axis = -1) # [bs, Nx, k, eC]
+        # kNNEdg = tf.concat([kNNEdg, neighbor_pos, neighbor_quadratic], axis = -1) # [bs, Nx, k, eC]
 
         return posX, posY, kNNIdx, kNNEdg
 
@@ -224,8 +225,12 @@ def bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.
 
     return res, [W_neighbor, b_neighbor] # [bs, Nx, channels]
 
+global_is_train = True
+
 def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
     
+    global global_is_train
+
     with tf.variable_scope(name):
 
         bs = Xs.shape[0]
@@ -238,22 +243,40 @@ def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf
 
         neighbors = tf.gather_nd(Ys, kNNIdx)
         # neighbors: Edge u-v = [u;v;edg]
-        neighbors = tf.concat([neighbors, kNNEdg], axis = -1) # [bs, Nx, k, Cx+Cy+eC]
+        # neighbors = tf.concat([neighbors, kNNEdg], axis = -1) # [bs, Nx, k, Cx+Cy+eC]
+
+        fCh = 2
+        if channels > 32:
+            fCh = 3
 
         ### Do the convolution ###
-        mlp = [channels * 2, channels * 2]
-        n = neighbors
+        mlp = [channels]
+        n = kNNEdg
         for i in range(len(mlp)):
-            n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = tf.nn.elu, scope = 'mlp%d' % i)
-        n = tf.contrib.layers.conv2d(n, channels * 2, [1, 1], padding = 'SAME', activation_fn = tf.nn.sigmoid, scope = 'mlp_out')
-        n = tf.reduce_mean(n, axis = 2)
+            n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = tf.nn.elu, scope = 'mlp%d' % i, weights_initializer = W_init)
+        n = tf.contrib.layers.conv2d(n, channels * fCh, [1, 1], padding = 'SAME', activation_fn = tf.nn.tanh, scope = 'mlp_out', weights_initializer = W_init)
+        # n = batch_norm(n, 0.999, global_is_train, 'bn')
+        cW = tf.reshape(n, [bs, Nx, k, channels, fCh])
         
-        _act = act
-        if _act is None:
-            _act = tf.identity
-        n = tf.contrib.layers.conv1d(n, channels, [1], padding = 'SAME', activation_fn = _act, scope = 'conv')
+        # Batch matmul won't work for more than 65535 matrices ???
+        # n = tf.matmul(n, tf.reshape(neighbors, [bs, Nx, k, Cy, 1]))
+        # Fallback solution
+        n = tf.contrib.layers.conv2d(neighbors, channels * fCh, [1, 1], padding = 'SAME', activation_fn = None, scope = 'feature_combine', weights_initializer = W_init)
+        n = tf.reshape(n, [bs, Nx, k, channels, fCh])
+        n = tf.reduce_sum(tf.multiply(cW, n), axis = -1)
 
-    return n, [] # [bs, Nx, channels]
+        print(n.shape)
+        print("Graph cConv: [%3d x %2d] = %4d" % (channels, fCh, channels * fCh))
+        # n = tf.reshape(n, [bs, Nx, k, channels])
+
+        b = tf.get_variable('b_out', dtype = default_dtype, shape = [channels], initializer = b_init, trainable = True)
+        n = tf.reduce_mean(n, axis = 2)
+        n = tf.nn.bias_add(n, b)
+        
+        if act is not None:
+            n = act(n)
+
+    return n, [b] # [bs, Nx, channels]
 
 def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_final = False, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
 
@@ -578,15 +601,28 @@ class model_particles:
             # channels = [hd // 2, hd, hd*2]
             
             # ShapeNet_shallow_feature
-            blocks = 3
-            particles_count = [self.gridMaxSize, 1920, self.cluster_count]
-            conv_count = [2, 2, 1]
-            res_count = [0, 0, 1]
-            kernel_size = [self.knn_k * 2, self.knn_k * 4, self.knn_k * 2]
-            bik = [16, 32, 64]
-            hd = self.particle_hidden_dim
-            channels = [hd // 8, hd // 4, hd // 3]
+            # blocks = 3
+            # particles_count = [self.gridMaxSize, 1920, self.cluster_count]
+            # conv_count = [1, 2, 0]
+            # res_count = [0, 0, 2]
+            # kernel_size = [self.knn_k, self.knn_k, self.knn_k]
+            # bik = [0, 32, 64]
+            # hd = self.particle_hidden_dim
+            # channels = [hd // 2, hd, hd * 2]
             
+            # ShapeNet_regular_featureSqz
+            blocks = 5
+            particles_count = [self.gridMaxSize, 1920, 768, 256, self.cluster_count]
+            conv_count = [1, 2, 2, 0, 0]
+            res_count = [0, 0, 0, 1, 2]
+            kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k, self.knn_k]
+            bik = [0, 32, 32, 48, 64]
+            hd = self.particle_hidden_dim
+            channels = [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, hd * 2]
+            
+            # bik = [0, 4, 32]
+            # channels = [hd // 8, hd // 6, hd // 4]
+
             # ShapeNet_shallow_uniform_convConcatSimpleMLP
             # blocks = 3
             # particles_count = [self.gridMaxSize, 1920, self.cluster_count]
@@ -803,10 +839,10 @@ class model_particles:
                 blocks = 1
                 pcnt = [self.gridMaxSize] # particle count
                 generator = [4] # Generator depth
-                refine = [0] # refine steps (each refine step = 1x res block (2x gconv))
-                hdim = [self.particle_hidden_dim]
+                refine = [2] # refine steps (each refine step = 1x res block (2x gconv))
+                hdim = [self.particle_hidden_dim // 2]
                 fdim = [self.particle_latent_dim] # dim of features used for folding
-                knnk = [self.knn_k]
+                knnk = [self.knn_k // 2]
 
                 pos_range = 3
 
@@ -847,7 +883,7 @@ class model_particles:
 
                             for gi in range(generator[bi]):
                                 with tf.variable_scope('gen%d' % gi):
-                                    z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
+                                    z, v = Conv1dWrapper(z, 2 * fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
                                     z = batch_norm(z, 0.999, is_train, name = 'bn')
                                     z = self.act(z)
 
@@ -879,7 +915,7 @@ class model_particles:
 
                         for r in range(refine[bi]):
                         
-                            _, gr_idx, gr_edg = kNNG_gen(pos, self.knn_k, 3, name = 'grefine%d/ggen' % r)
+                            _, gr_idx, gr_edg = kNNG_gen(pos, self.knn_k // 3, 3, name = 'grefine%d/ggen' % r)
                             tmp = n
 
                             for i in range(refine_res_blocks):

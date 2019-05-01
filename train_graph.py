@@ -85,7 +85,7 @@ model.default_dtype = args.dtype
 
 # Create the model
 if args.adam:
-    optimizer = tf.train.AdamOptimizer(learning_rate = args.learning_rate, beta1 = args.beta1, beta2 = args.beta2)
+    optimizer = tf.train.AdamOptimizer(learning_rate = args.learning_rate, beta1 = args.beta1, beta2 = args.beta2, epsilon=1e-8)
 else:
     optimizer = tf.train.MomentumOptimizer(learning_rate = args.learning_rate, momentum = args.beta1)
 
