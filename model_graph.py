@@ -20,6 +20,7 @@ from termcolor import colored, cprint
 from time import gmtime, strftime
 
 default_dtype = tf.float32
+SN = True
 
 def batch_norm(inputs, decay, is_train, name):
 
@@ -44,6 +45,61 @@ def batch_norm(inputs, decay, is_train, name):
     # return tf.contrib.layers.group_norm(inputs, 
 
 # TODO: use Spec norm
+def spectral_norm(w, iteration=1):
+    w_shape = w.shape.as_list()
+    w = tf.reshape(w, [-1, w_shape[-1]])
+
+    u = tf.get_variable("u", [1, w_shape[-1]], initializer=tf.random_normal_initializer(), trainable=False)
+
+    u_hat = u
+    v_hat = None
+    for i in range(iteration):
+        """
+        power iteration
+        Usually iteration = 1 will be enough
+        """
+        v_ = tf.matmul(u_hat, tf.transpose(w))
+        v_hat = tf.nn.l2_normalize(v_)
+
+        u_ = tf.matmul(v_hat, w)
+        u_hat = tf.nn.l2_normalize(u_)
+
+    u_hat = tf.stop_gradient(u_hat)
+    v_hat = tf.stop_gradient(v_hat)
+
+    sigma = tf.matmul(tf.matmul(v_hat, w), tf.transpose(u_hat))
+
+    with tf.control_dependencies([u.assign(u_hat)]):
+        w_norm = w / sigma
+        w_norm = tf.reshape(w_norm, w_shape)
+
+    return w_norm
+
+def fc_as_conv_SN(inputs, outDim, act = None, bias = True, name = 'fc'):
+    
+    input_shape = inputs.shape.as_list()
+    inputs = tf.reshape(inputs, [-1, input_shape[-1]])
+
+    with tf.name_scope(name):
+        
+        w = tf.get_variable('W', shape = [outDim, input_shape[-1]], dtype = default_dtype)
+
+        if SN:
+            x = tf.matmul(spectral_norm(w), inputs)
+        else:
+            x = tf.matmul(w, inputs)
+
+        if bias == True:
+            b = tf.get_variable('b', shape = [outDim], dtype = default_dtype)
+            x = tf.bias_add(x, b)
+        
+        x_shape = input_shape
+        x_shape[-1] = outDim
+        x = tf.reshape(x, x_shape)
+
+        if act is not None:
+            x = act(x)
+        return x
 
 # Laplacian is always FP32
 def Laplacian(bs, N, k, kNNIdx, name = 'kNNG_laplacian'):
@@ -258,15 +314,25 @@ def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf
         mlp = [channels]
         n = kNNEdg
         for i in range(len(mlp)):
-            n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = tf.nn.elu, scope = 'mlp%d' % i, weights_initializer = W_init)
-        n = tf.contrib.layers.conv2d(n, channels * fCh, [1, 1], padding = 'SAME', activation_fn = tf.nn.tanh, scope = 'mlp_out', weights_initializer = W_init)
+            if SN:
+                n = fc_as_conv_SN(n, mlp[i], tf.nn.elu, name = 'mlp%d' % i)
+            else:
+                n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = tf.nn.elu, scope = 'mlp%d' % i, weights_initializer = W_init)
+        
+        if SN:
+            n = fc_as_conv_SN(n, channels * fCh, tf.nn.tanh, name = 'mlp_out' % i)
+        else:
+            n = tf.contrib.layers.conv2d(n, channels * fCh, [1, 1], padding = 'SAME', activation_fn = tf.nn.tanh, scope = 'mlp_out', weights_initializer = W_init)
         # n = batch_norm(n, 0.999, global_is_train, 'bn')
         cW = tf.reshape(n, [bs, Nx, k, channels, fCh])
         
         # Batch matmul won't work for more than 65535 matrices ???
         # n = tf.matmul(n, tf.reshape(neighbors, [bs, Nx, k, Cy, 1]))
         # Fallback solution
-        n = tf.contrib.layers.conv2d(neighbors, channels * fCh, [1, 1], padding = 'SAME', activation_fn = None, scope = 'feature_combine', weights_initializer = W_init)
+        if SN:
+            n = fc_as_conv_SN(neighbors, channels * fCh, None, name = 'feature_combine')
+        else:
+            n = tf.contrib.layers.conv2d(neighbors, channels * fCh, [1, 1], padding = 'SAME', activation_fn = None, scope = 'feature_combine', weights_initializer = W_init)
         n = tf.reshape(n, [bs, Nx, k, channels, fCh])
         n = tf.reduce_sum(tf.multiply(cW, n), axis = -1)
 
@@ -488,26 +554,29 @@ def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, ch
 
 def Conv1dWrapper(inputs, filters, kernel_size, stride, padding, act, W_init, b_init, bias = True, name = 'conv'):
 
-    with tf.variable_scope(name):
+    if SN:
+        return fc_as_conv_SN(inputs, filters, act, name = name)
+    else:
+        with tf.variable_scope(name):
 
-        N = inputs.shape[1]
-        C = inputs.shape[2]
-        variables = []
+            N = inputs.shape[1]
+            C = inputs.shape[2]
+            variables = []
 
-        W = tf.get_variable('W', dtype = default_dtype, shape = [kernel_size, C, filters], initializer=W_init, trainable=True)
-        variables.append(W)
+            W = tf.get_variable('W', dtype = default_dtype, shape = [kernel_size, C, filters], initializer=W_init, trainable=True)
+            variables.append(W)
 
-        y = tf.nn.conv1d(inputs, W, stride, padding = padding)
+            y = tf.nn.conv1d(inputs, W, stride, padding = padding)
 
-        if bias == True:
-            b = tf.get_variable('b', dtype = default_dtype, shape = [filters], initializer=b_init, trainable=True)
-            y = tf.nn.bias_add(y, b)
-            variables.append(b)
+            if bias == True:
+                b = tf.get_variable('b', dtype = default_dtype, shape = [filters], initializer=b_init, trainable=True)
+                y = tf.nn.bias_add(y, b)
+                variables.append(b)
 
-        if act is not None:
-            y = act(y)
+            if act is not None:
+                y = act(y)
 
-        return y, variables
+            return y, variables
 
 def kNNGPosition_refine(input_position, input_feature, act, hidden = 128, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGPosRefine'):
 
