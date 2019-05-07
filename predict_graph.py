@@ -114,9 +114,9 @@ model.initial_grid_size = model.total_world_size / 16
 # Build the model
 normalized_X = model.ph_X / args.normalize
 normalized_Y = model.ph_Y / args.normalize
-cpos, cfea, evalsX = model.build_predict_Enc(normalized_X, True, False)
+cpos, cfea, poolX, evalsX = model.build_predict_Enc(normalized_X, True, False)
 if args.dosim:
-    cpos_Y, cfea_Y, evalsY = model.build_predict_Enc(normalized_Y, False, True)
+    cpos_Y, cfea_Y, poolY, evalsY = model.build_predict_Enc(normalized_Y, False, True)
 
 pRange = 3
 outDim = args.output_dim
@@ -184,6 +184,9 @@ pgt = tf.placeholder('float32', [8, N, pRange])
 prc = tf.placeholder('float32', [8, N, pRange])
 pl = model.chamfer_metric(pgt / args.normalize, prc / args.normalize, pRange, tf.abs) * 40.0
 
+pools = [np.zeros((totalIterations * bs, model.pCount[i+1], pRange)) for i in range(model.pool_count)]
+evals = [np.zeros((totalIterations * bs, model.pCount[i]  , pRange + 1)) for i in range(model.pool_count)]
+
 for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, False, args.output_dim):
 
     epoch_idx += 1
@@ -218,7 +221,7 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
             _cpos_y, _cfea_y = sess.run([cpos_Y, cfea_Y], feed_dict = { model.ph_Y: _x[1] })
         else:
             # Just do auto-encoder
-            _cpos, _cfea, eX = sess.run([cpos, cfea, evalsX], feed_dict = {model.ph_X: _x[0]})
+            _cpos, _cfea, pX, eX = sess.run([cpos, cfea, poolX, evalsX], feed_dict = {model.ph_X: _x[0]})
             # print(_cfea)
             _rec, _recf, n_loss = sess.run([prec, precf, ___l], feed_dict = { ph_cpos: _cpos, ph_cfea: _cfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
 
@@ -233,6 +236,11 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
             groundTruth[sidx:eidx, :, :] = _x[1][:, :, 0:outDim]
         reconstruct[sidx:eidx, :, :] = _rec[:, :, 0:outDim]
         fold[sidx:eidx, :, :] = _recf[:, :, 0:outDim]
+
+        if not args.dosim:
+            for i in range(len(pX)):
+                pools[i][sidx:eidx] = pX[i]
+                evals[i][sidx:eidx] = eX[i]
 
         if args.dosim:
             clusters_X[ sidx:eidx, :, :] = _cpos_x[:, :, 0:pRange] * 48.0
@@ -260,7 +268,12 @@ if not os.path.exists(outpath):
 np.save(os.path.join(outpath, 'rc.npy'), reconstruct)
 np.save(os.path.join(outpath, 'rf.npy'), fold)
 np.save(os.path.join(outpath, 'gX.npy'), groundTrutX)
-np.save(os.path.join(outpath, 'eX.npy'), eX[0])
+if args.dosim:
+    np.save(os.path.join(outpath, 'eX.npy'), eX[0])
+else:
+    for i in range(len(pools)):
+        np.save(os.path.join(outpath, 'p%d.npy' % i), pools[i])
+        np.save(os.path.join(outpath, 'e%d.npy' % i), evals[i])
 np.save(os.path.join(outpath, 'cX.npy'), clusters_X)
 
 if args.dosim:

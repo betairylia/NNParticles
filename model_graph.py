@@ -25,6 +25,9 @@ def batch_norm(inputs, decay, is_train, name):
 
     decay = 0.965
 
+    # Disable norm
+    return inputs
+
     # if default_dtype == tf.float32:
     #     return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
     # if default_dtype == tf.float16:
@@ -39,6 +42,8 @@ def batch_norm(inputs, decay, is_train, name):
     else:
         return tf.contrib.layers.instance_norm(inputs, epsilon = 1e-3, scope = name)
     # return tf.contrib.layers.group_norm(inputs, 
+
+# TODO: use Spec norm
 
 # Laplacian is always FP32
 def Laplacian(bs, N, k, kNNIdx, name = 'kNNG_laplacian'):
@@ -319,6 +324,28 @@ def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_fin
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
+def kNNGPooling_rand(inputs, pos, bs, N, k, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool'):
+
+    with tf.variable_scope(name):
+
+        k = min(N, k)
+
+        y = tf.random.uniform([bs, N]) # [bs, N]
+        val, idx = tf.nn.top_k(y, k) # [bs, k]
+
+        # Pick them
+        batches = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, k])
+        gather_idx = tf.stack([batches, idx], axis = -1)
+        pool_features = tf.gather_nd(inputs, gather_idx) # [bs, k, C]
+        pool_position = tf.gather_nd(pos, gather_idx) # [bs, k, 3]
+
+        if False:
+            pool_features = tf.multiply(pool_features, tf.reshape(tf.nn.tanh(val), [bs, k, 1]))
+    
+    return pool_position, pool_features, y, [], 0.0
+
+# Inputs: [bs, N, C]
+#    Pos: [bs, N, 3]
 def kNNGPooling_GUnet(inputs, pos, k, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool'):
 
     with tf.variable_scope(name):
@@ -361,7 +388,7 @@ def kNNGPooling_CAHQ(inputs, pos, k, kNNIdx, kNNEdg, laplacian, masking = True, 
         if stopGradient == True:
             inputs = tf.stop_gradient(inputs)
 
-        kNNEdg_dist = tf.norm(kNNEdg, axis = -1)
+        kNNEdg_dist = tf.norm(kNNEdg, axis = -1, keepdims = True)
         imp = tf.contrib.layers.conv1d(inputs, 1, 1, padding = 'SAME', activation_fn = tf.nn.tanh, scope = 'importance')
 
         layers = 4
@@ -375,7 +402,7 @@ def kNNGPooling_CAHQ(inputs, pos, k, kNNIdx, kNNEdg, laplacian, masking = True, 
             f = tf.reduce_mean(f, axis = 2) # [bs, N, 1]
             f = tf.contrib.layers.conv1d(f, 16, 1, padding = 'SAME', scope = 'mlp%d/ro/h1' % i)
             f = tf.contrib.layers.conv1d(f, 1,  1, padding = 'SAME', scope = 'mlp%d/ro/h2' % i)
-            f = batch_norm(f, 0.999, is_train, 'mlp%d/bn' % i)
+            f = batch_norm(f, 0.999, True, 'mlp%d/bn' % i)
             f = f + tmp
 
         y = tf.reshape(f, [bs, N])
@@ -400,7 +427,7 @@ def kNNGPooling_CAHQ(inputs, pos, k, kNNIdx, kNNEdg, laplacian, masking = True, 
             # pool_features = tf.multiply(pool_features, tf.reshape(tf.nn.tanh(val), [bs, k, 1]))
             pool_features = tf.multiply(pool_features, tf.reshape(val, [bs, k, 1]))
     
-    return pool_position, pool_features, y, [W], tf.cast(freq_loss, default_dtype)
+    return pool_position, pool_features, y, [], tf.cast(freq_loss, default_dtype)
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
@@ -585,6 +612,7 @@ class model_particles:
     def particleEncoder(self, input_particle, output_dim, is_train = False, reuse = False, returnPool = False):
 
         w_init = tf.random_normal_initializer(stddev=self.wdev)
+        w_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype)
         b_init = tf.constant_initializer(value=0.0)
         g_init = tf.random_normal_initializer(1., 0.02)
 
@@ -667,13 +695,23 @@ class model_particles:
             
             # ShapeNet_regular_featureSqz
             blocks = 5
-            particles_count = [self.gridMaxSize, 1920, 768, 256, self.cluster_count]
+            particles_count = [self.gridMaxSize, 1920, 768, max(256, self.cluster_count * 2), self.cluster_count]
             conv_count = [1, 2, 2, 0, 0]
             res_count = [0, 0, 0, 1, 2]
-            kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k, self.knn_k]
+            kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k, min(self.knn_k, particles_count[4])]
             bik = [0, 32, 32, 48, 64]
             hd = self.particle_hidden_dim
-            channels = [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, hd * 2]
+            channels = [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(self.particle_latent_dim, hd * 2)]
+            
+            # ShapeNet_SingleVector
+            # blocks = 5
+            # particles_count = [self.gridMaxSize, 1920, 768, max(256, self.cluster_count * 2), self.cluster_count]
+            # conv_count = [1, 2, 2, 0, 1]
+            # res_count = [0, 0, 0, 1, 0]
+            # kernel_size = [self.knn_k, self.knn_k, self.knn_k, self.knn_k, min(self.knn_k, particles_count[4])]
+            # bik = [0, 32, 32, 48, 256]
+            # hd = self.particle_hidden_dim
+            # channels = [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(self.particle_latent_dim, hd * 2)]
             
             # bik = [0, 4, 32]
             # channels = [hd // 8, hd // 6, hd // 4]
@@ -705,6 +743,9 @@ class model_particles:
             # hd = self.particle_hidden_dim
             # channels = [hd // 2, int(hd / 1.4), hd, int(hd * 1.5), hd * 2]
 
+            self.pool_count = blocks - 1
+            self.pCount = particles_count
+
             try:
                 bik
             except NameError:
@@ -725,7 +766,13 @@ class model_particles:
                     prev_n = n
                     prev_pos = gPos
                     # gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
-                    gPos, n, eval_func, v, fl = kNNGPooling_CAHQ(n, gPos, particles_count[i], gIdx, gEdg, MatL, masking = True, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
+                    # gPos, n, eval_func, v, fl = kNNGPooling_CAHQ(n, gPos, particles_count[i], gIdx, gEdg, MatL, masking = True, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
+                    gPos, n, eval_func, v, fl = kNNGPooling_rand(n, gPos, self.batch_size, particles_count[i-1], particles_count[i], MatL, masking = True, W_init = w_init, name = 'gpool%d' % i)
+                    
+                    # Single point
+                    # if i == 4:
+                    #     gPos = tf.zeros_like(gPos)
+
                     var_list.append(v)
                     pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
 
@@ -771,6 +818,11 @@ class model_particles:
         w_init = tf.random_normal_initializer(stddev=self.wdev)
         w_init_fold = tf.random_normal_initializer(stddev= 1.0*self.wdev)
         w_init_pref = tf.random_normal_initializer(stddev=0.03*self.wdev)
+        
+        w_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype)
+        w_init_fold = w_init
+        w_init_pref = w_init
+        
         b_init = tf.constant_initializer(value=0.0)
         g_init = tf.random_normal_initializer(1., 0.02)
 
@@ -896,8 +948,11 @@ class model_particles:
                 pcnt = [self.gridMaxSize] # particle count
                 generator = [4] # Generator depth
                 refine = [0] # refine steps (each refine step = 1x res block (2x gconv))
-                hdim = [self.particle_hidden_dim // 2]
+                hdim = [self.particle_hidden_dim // 3]
                 fdim = [self.particle_latent_dim] # dim of features used for folding
+                # hdim = [self.particle_latent_dim]
+                # fdim = [self.particle_latent_dim]
+                gen_hdim = [self.particle_latent_dim]
                 knnk = [self.knn_k // 2]
 
                 pos_range = 3
@@ -933,17 +988,42 @@ class model_particles:
                                     z = batch_norm(z, 0.999, is_train, name = 'bn')
                                     z = self.act(z)
 
-                        else: # Regular small generator
+                        elif True: # Regular small generator
                             fuse_fea, v = Conv1dWrapper(origin_fea, fdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'feaFuse')
                             z = tf.concat([z, fuse_fea], axis = -1)
 
                             for gi in range(generator[bi]):
                                 with tf.variable_scope('gen%d' % gi):
                                     z, v = Conv1dWrapper(z, 2 * fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
+                                    # z = batch_norm(z, 0.999, is_train, name = 'bn')
+                                    z = self.act(z)
+                            
+                            z, v = Conv1dWrapper(z, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen/fc_out')
+
+                        else: # Advanced conditioned small generator
+                            
+                            with tf.variable_scope('weight_gen'):
+                                w, v = Conv1dWrapper(origin_fea, gen_hdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'mlp1')
+                                w, v = Conv1dWrapper(origin_fea, gen_hdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'mlp2')
+                                w, v = Conv1dWrapper(w, pos_range * fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'mlp_weights_out')
+                                b, v = Conv1dWrapper(w, pos_range, 1, 1, 'SAME', None, w_init_fold, b_init, True, 'mlp_bias_out')
+                                w = tf.reshape(w, [self.batch_size, fold_particles_count, fdim[bi], pos_range])
+                                # w = tf.nn.softmax(w, axis = 2)
+
+                            z = tf.random.uniform([self.batch_size, fold_particles_count, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+
+                            for gi in range(generator[bi]):
+                                with tf.variable_scope('gen%d' % gi):
+                                    z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
                                     z = batch_norm(z, 0.999, is_train, name = 'bn')
                                     z = self.act(z)
+                            z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc_final')
+                            z = tf.multiply(w, tf.reshape(z, [self.batch_size, fold_particles_count, fdim[bi], 1]))
+                            z = tf.reduce_sum(z, axis = 2)
+                            z = z + b
 
-                        ap, v = Conv1dWrapper(z, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen/fc_out')
+                        # ap, v = Conv1dWrapper(z, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen/fc_out')
+                        ap = z
                         ap = ap + origin_pos # ap is alter_particles
 
                         gen_only.append(tf.concat([ap, coarse_pos], axis = 1))
@@ -966,7 +1046,7 @@ class model_particles:
 
                         # Position Refinement
                         # refine_loops = 0
-                        refine_res_blocks = 2
+                        refine_res_blocks = 1
                         vars_loop = []
 
                         for r in range(refine[bi]):
@@ -1135,22 +1215,24 @@ class model_particles:
         # rec_particles = tf.random.uniform([self.batch_size, self.gridMaxSize, 3], minval = -1.0, maxval = 1.0)
 
         bs = groundtruth.shape[0]
-        N  = groundtruth.shape[1]
+        Np = particles.shape[1]
+        Ng = groundtruth.shape[1]
 
         assert groundtruth.shape[2] == particles.shape[2]
 
         # NOTE: current using position (0:3) only here for searching nearest point.
-        row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, N, 1, pos_range])
-        col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, N, pos_range])
+        row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, Np, 1, pos_range])
+        col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, Ng, pos_range])
         # distance = tf.norm(row_predicted - col_groundtru, ord = 'euclidean', axis = -1)
         distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
         
         rearrange_predicted_N = tf.argmin(distance, axis = 1, output_type = tf.int32)
         rearrange_groundtru_N = tf.argmin(distance, axis = 2, output_type = tf.int32)
         
-        batch_subscript = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, N])
-        rearrange_predicted = tf.stack([batch_subscript, rearrange_predicted_N], axis = 2)
-        rearrange_groundtru = tf.stack([batch_subscript, rearrange_groundtru_N], axis = 2)
+        batch_subscriptG = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, Ng])
+        batch_subscriptP = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, Np])
+        rearrange_predicted = tf.stack([batch_subscriptG, rearrange_predicted_N], axis = 2)
+        rearrange_groundtru = tf.stack([batch_subscriptP, rearrange_groundtru_N], axis = 2)
 
         nearest_predicted = tf.gather_nd(  particles[:, :, :], rearrange_predicted)
         nearest_groundtru = tf.gather_nd(groundtruth[:, :, :], rearrange_groundtru)
@@ -1319,8 +1401,9 @@ class model_particles:
 
             else:
 
-                reconstruct_loss += self.chamfer_metric(rec_X, normalized_X[:, :, 0:outDim], 3, self.loss_func)
+                reconstruct_loss += self.chamfer_metric(rec_X[:, self.cluster_count:, 0:outDim], normalized_X[:, :, 0:outDim], 3, self.loss_func)
                 reconstruct_loss *= 40.0
+                raw_error = self.chamfer_metric(rec_X, normalized_X[:, :, 0:outDim], 3, tf.abs) * 40.0
         
         # reconstruct_loss += self.chamfer_metric(fold_X[:, :, 0:3], normalized_X[:, :, 0:3], 3, self.loss_func) * 40.0
         # reconstruct_loss *= 0.5
@@ -1344,7 +1427,7 @@ class model_particles:
         # rec_YX = rec_YX * self.normalize
         # rec_Y  = rec_Y  * self.normalize
 
-        return reconstruct_loss, simulation_loss, hqpool_loss, pool_align_loss, particle_net_vars
+        return reconstruct_loss, simulation_loss, hqpool_loss, pool_align_loss, particle_net_vars, raw_error
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
@@ -1361,11 +1444,11 @@ class model_particles:
             floss = 0
 
             # Enc(X)
-            posX, feaX, _v, _floss, evals = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
+            posX, feaX, _v, pPos, _floss, evals = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse, returnPool = True)
             var_list.append(_v)
             floss += _floss
 
-        return posX, feaX, evals
+        return posX, feaX, pPos, evals
     
     # Only simulates posX & feaX for a single step
     def build_predict_Sim(self, pos, fea, is_train = False, reuse = False):
@@ -1392,7 +1475,7 @@ class model_particles:
 
         # Train & Validation
         self.train_particleRecLoss, self.train_particleSimLoss, self.train_HQPLoss, self.train_PALoss,\
-        self.particle_vars =\
+        self.particle_vars, self.train_error =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
         # self.val_particleRawLoss, self.val_particleCardLoss, _, _, _ =\

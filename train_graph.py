@@ -120,7 +120,7 @@ model.build_model()
 
 # Summary the variables
 ptraps = tf.summary.scalar('Particle Loss', model.train_particleLoss)
-ptraprs = tf.summary.scalar('Particle Reconstruct Loss', model.train_particleRecLoss)
+ptraprs = tf.summary.scalar('Particle Reconstruct Loss', model.train_error)
 ptrapss = tf.summary.scalar('Particle Simulation Loss', model.train_particleSimLoss)
 # vals = tf.summary.scalar('Validation Loss', model.val_particleLoss)
 ptrapfs = tf.summary.scalar('Particle HQPool Loss', model.train_HQPLoss)
