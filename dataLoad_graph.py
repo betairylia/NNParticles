@@ -16,27 +16,30 @@ overrideGridSize = 48
 def get_fileNames(main_dir):
     
     files = []
+    val = None
 
     for filename in os.listdir(main_dir):
         if filename.split('.')[-1] == 'npy':
-            files.append(os.path.join(main_dir, filename))
+            if filename == 'val.npy':
+                val = os.path.join(main_dir, filename)
+            else:
+                files.append(os.path.join(main_dir, filename))
     
-    return files
+    if val == None:
+        val = files[len(files) - 1]
+        del files[len(files) - 1]
+
+    if len(files) <= 0:
+        files.append(val)
+        val = None
+
+    return files, val
 
 def fileCount(path):
     return len(get_fileNames(path))
 
 def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
-    
-    if is_Train == True:
-        start = 0.0
-        # end = 0.9
-        end = 1.0
-    else:
-        # start = 0.9
-        start = 1.0
-        end = 1.0
-    
+     
     assert content['gridSize'] == maxParticlesPerGrid
 
     batch_X = np.zeros((batch_size, maxParticlesPerGrid, content['dim'] + 1))
@@ -55,45 +58,87 @@ def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
 
     # in order to get validation set "pure" from training set, shuffling with a fixed order (maybe it is not that pure so whatever)
     if shuffle == True:
-        random.Random(8246).shuffle(steps)
+        random.shuffle(steps)
+        # random.Random(8246).shuffle(steps)
     # steps = steps[0:(len(steps) // 4)]
     
-    for step in steps:
-        
-        if noSim == False:
-            batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, 0, :, 0:content['dim']]
-            batch_Y[batch_idx, :, 0:content['dim']] = content['data'][step, 1, :, 0:content['dim']]
-            batch_L[batch_idx, :, 0:content['dim']] = content['data'][step, 2, :, 0:content['dim']]
+    if is_Train:
+        for step in steps:
+            
+            if noSim == False:
+                batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, 0, :, 0:content['dim']]
+                batch_Y[batch_idx, :, 0:content['dim']] = content['data'][step, 1, :, 0:content['dim']]
+                batch_L[batch_idx, :, 0:content['dim']] = content['data'][step, 2, :, 0:content['dim']]
 
-            batch_X[batch_idx, :, 3:content['dim']] *= vM        
-            batch_Y[batch_idx, :, 3:content['dim']] *= vM
-            batch_L[batch_idx, :, 3:content['dim']] *= vM
+                batch_X[batch_idx, :, 3:content['dim']] *= vM        
+                batch_Y[batch_idx, :, 3:content['dim']] *= vM
+                batch_L[batch_idx, :, 3:content['dim']] *= vM
 
-            # FIXME: How to store grid cards?
-            batch_X[batch_idx, :, content['dim']] = 1
-            batch_Y[batch_idx, :, content['dim']] = 1
-            batch_L[batch_idx, :, content['dim']] = 1
+                # FIXME: How to store grid cards?
+                batch_X[batch_idx, :, content['dim']] = 1
+                batch_Y[batch_idx, :, content['dim']] = 1
+                batch_L[batch_idx, :, content['dim']] = 1
 
-            batch_X_size[batch_idx] = maxParticlesPerGrid
-            avgCard += batch_X_size[batch_idx]
+                batch_X_size[batch_idx] = maxParticlesPerGrid
+                avgCard += batch_X_size[batch_idx]
 
-        else:
-            batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, :, 0:content['dim']]
-            batch_X[batch_idx, :, 3:content['dim']] *= vM
-            batch_X[batch_idx, :, content['dim']] = 1
-            batch_X_size[batch_idx] = maxParticlesPerGrid
-            avgCard += batch_X_size[batch_idx]
+            else:
+                batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, :, 0:content['dim']]
+                batch_X[batch_idx, :, 3:content['dim']] *= vM
+                batch_X[batch_idx, :, content['dim']] = 1
+                batch_X_size[batch_idx] = maxParticlesPerGrid
+                avgCard += batch_X_size[batch_idx]
 
-        # Count batch
-        batch_idx += 1
-        if batch_idx >= batch_size:
-            batch_idx = 0
+            # Count batch
+            batch_idx += 1
+            if batch_idx >= batch_size:
+                batch_idx = 0
 
-            print("Avg card = %6.2f" % (avgCard / batch_size), end = ' ')
-            avgCard = 0
+                print("%6.2f" % (avgCard / batch_size), end = ' ')
+                avgCard = 0
 
-            yield [batch_X, batch_Y, batch_L], batch_X_size
-                
+                yield [batch_X, batch_Y, batch_L], batch_X_size
+    else:
+        i = 0
+        while True:
+            
+            step = steps[i % len(steps)]
+            i += 1
+
+            if noSim == False:
+                batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, 0, :, 0:content['dim']]
+                batch_Y[batch_idx, :, 0:content['dim']] = content['data'][step, 1, :, 0:content['dim']]
+                batch_L[batch_idx, :, 0:content['dim']] = content['data'][step, 2, :, 0:content['dim']]
+
+                batch_X[batch_idx, :, 3:content['dim']] *= vM        
+                batch_Y[batch_idx, :, 3:content['dim']] *= vM
+                batch_L[batch_idx, :, 3:content['dim']] *= vM
+
+                # FIXME: How to store grid cards?
+                batch_X[batch_idx, :, content['dim']] = 1
+                batch_Y[batch_idx, :, content['dim']] = 1
+                batch_L[batch_idx, :, content['dim']] = 1
+
+                batch_X_size[batch_idx] = maxParticlesPerGrid
+                # avgCard += batch_X_size[batch_idx]
+
+            else:
+                batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, :, 0:content['dim']]
+                batch_X[batch_idx, :, 3:content['dim']] *= vM
+                batch_X[batch_idx, :, content['dim']] = 1
+                batch_X_size[batch_idx] = maxParticlesPerGrid
+                # avgCard += batch_X_size[batch_idx]
+
+            # Count batch
+            batch_idx += 1
+            if batch_idx >= batch_size:
+                batch_idx = 0
+
+                # print("Avg card = %6.2f" % (avgCard / batch_size), end = ' ')
+                # avgCard = 0
+
+                yield [batch_X, batch_Y, batch_L], batch_X_size
+
 def gen_batch_predict(content, batch_size, currentStep, step_count):
     
     batch_X = np.zeros((batch_size, 27, maxParticlesPerGrid, 6))
@@ -127,9 +172,26 @@ def gen_batch_predict(content, batch_size, currentStep, step_count):
 
 def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True, dim = 0):
 
-    files = get_fileNames(path)
+    files, val = get_fileNames(path)
     # for i in range(len(files)):
     #     read_file(files[i])
+
+    print("Training set:")
+    print(files)
+    print('*=*=*')
+    print('Validation set:')
+    print(val)
+
+    if val is not None:
+        print("Loading validation set...")
+        data_val = np.load(val)
+        if data_val.ndim == 3:
+            content_val = {'data': data_val, 'stepCount': data_val.shape[0], 'gridSize': data_val.shape[1], 'dim': data_val.shape[2]}
+        else:
+            content_val = {'data': data_val, 'stepCount': data_val.shape[0], 'gridSize': data_val.shape[2], 'dim': data_val.shape[3]}
+        if dim > 0: content_val['dim'] = dim
+    else:
+        content_val = {}
 
     for i in range(n_epochs):
     # for i in range(n_epochs * len(files)):
@@ -141,7 +203,7 @@ def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True, dim = 0):
             content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[2], 'dim': data.shape[3]}
         if dim > 0: content['dim'] = dim
         # content = read_file(files[0], step_count * vM)
-        yield gen_batch(content, batch_size, vM, is_Train = True, shuffle = shuffle), gen_batch(content, batch_size, vM, is_Train = False, shuffle = shuffle)
+        yield gen_batch(content, batch_size, vM, is_Train = True, shuffle = shuffle), gen_batch(content_val, batch_size, vM, is_Train = False, shuffle = shuffle)
 
 def gen_epochs_predict(path, start_step, batch_size, step_count, vM):
 

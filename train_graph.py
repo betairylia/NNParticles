@@ -122,13 +122,13 @@ model.build_model()
 ptraps = tf.summary.scalar('Particle Loss', model.train_particleLoss)
 ptraprs = tf.summary.scalar('Particle Reconstruct Loss', model.train_error)
 ptrapss = tf.summary.scalar('Particle Simulation Loss', model.train_particleSimLoss)
-# vals = tf.summary.scalar('Validation Loss', model.val_particleLoss)
+vals = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections = None)
 ptrapfs = tf.summary.scalar('Particle HQPool Loss', model.train_HQPLoss)
 ptrapps = tf.summary.scalar('Particle Pool Align Loss', model.train_PALoss)
 
-# merged_train = tf.summary.merge([ptraps, ptraprs, ptrapcs, tps, tls])
-# merged_val = tf.summary.merge([vals])
-merged_train = tf.summary.merge_all()
+merged_train = tf.summary.merge([ptraps, ptraprs, ptrapss, ptrapfs, ptrapps])
+merged_val = tf.summary.merge([vals])
+# merged_train = tf.summary.merge_all()
 
 # Create session
 config = tf.ConfigProto()
@@ -187,14 +187,23 @@ maxl_array[1] = args.voxel_size
 epCount = dataLoad.fileCount(args.datapath)
 stepFactor = 9
 
-for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim):
+epochs = dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim)
 
+while True:
+    batch_train, batch_validate = next(epochs, [None, None])
     epoch_idx += 1
+
+    if batch_train == None:
+        break
+
     print(colored("Epoch %03d" % (epoch_idx), 'yellow'))
 
-    # Train
-    for _x, _x_size in epoch_train:
-        
+    # Training loop
+    while True:
+        _x, _x_size = next(batch_train, [None, None])
+        if _x == None:
+            break
+
         if batch_idx_train == 10 and args.profile:
             print(colored("Profiling in progress...", 'yellow'))
 
@@ -233,7 +242,16 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
             train_writer.add_summary(summary, batch_idx_train)
             batch_idx_train += 1
 
-        print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
+        print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %7.4f" % n_loss, 'green'), end = '\t')
+
+        _vx, _vx_size = next(batch_validate, [None, None])
+        
+        feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
+        n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
+        val_writer.add_summary(summary, batch_idx_test)
+        batch_idx_test += 1
+
+        print(colored("(val = %7.4f)" % n_loss, 'blue'))
 
         if batch_idx_train % (16000 // args.batch_size) == 0:
             sav = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)

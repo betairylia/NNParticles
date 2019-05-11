@@ -19,8 +19,11 @@ from termcolor import colored, cprint
 
 from time import gmtime, strftime
 
+from external.structural_losses.tf_approxmatch import approx_match, match_cost
+from external.sampling.tf_sampling import farthest_point_sample, prob_sample
+
 default_dtype = tf.float32
-SN = True
+SN = False
 
 def batch_norm(inputs, decay, is_train, name):
 
@@ -36,12 +39,19 @@ def batch_norm(inputs, decay, is_train, name):
    
     # return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
     # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, fused = True)
+    
+    # Batch norm
     # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, scope = name, fused = True)
+    
+    # Layer norm
     # return tf.contrib.layers.layer_norm(inputs, scope = name)
-    if default_dtype == tf.float32:
-        return tf.contrib.layers.instance_norm(inputs, scope = name)
-    else:
-        return tf.contrib.layers.instance_norm(inputs, epsilon = 1e-3, scope = name)
+    
+    # Instance norm 
+    if False:
+        if default_dtype == tf.float32:
+            return tf.contrib.layers.instance_norm(inputs, scope = name)
+        else:
+            return tf.contrib.layers.instance_norm(inputs, epsilon = 1e-3, scope = name)
     # return tf.contrib.layers.group_norm(inputs, 
 
 # TODO: use Spec norm
@@ -80,18 +90,18 @@ def fc_as_conv_SN(inputs, outDim, act = None, bias = True, name = 'fc'):
     input_shape = inputs.shape.as_list()
     inputs = tf.reshape(inputs, [-1, input_shape[-1]])
 
-    with tf.name_scope(name):
+    with tf.variable_scope(name):
         
-        w = tf.get_variable('W', shape = [outDim, input_shape[-1]], dtype = default_dtype)
+        w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype)
 
         if SN:
-            x = tf.matmul(spectral_norm(w), inputs)
+            x = tf.matmul(inputs, spectral_norm(w))
         else:
-            x = tf.matmul(w, inputs)
+            x = tf.matmul(inputs, w)
 
         if bias == True:
             b = tf.get_variable('b', shape = [outDim], dtype = default_dtype)
-            x = tf.bias_add(x, b)
+            x = tf.nn.bias_add(x, b)
         
         x_shape = input_shape
         x_shape[-1] = outDim
@@ -286,9 +296,7 @@ def bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.
 
     return res, [W_neighbor, b_neighbor] # [bs, Nx, channels]
 
-global_is_train = True
-
-def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
+def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, is_train, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive'):
     
     global global_is_train
 
@@ -315,24 +323,28 @@ def bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act, channels, W_init = tf
         n = kNNEdg
         for i in range(len(mlp)):
             if SN:
-                n = fc_as_conv_SN(n, mlp[i], tf.nn.elu, name = 'mlp%d' % i)
+                n = fc_as_conv_SN(n, mlp[i], tf.nn.elu, name = 'kernel/mlp%d' % i)
             else:
-                n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = tf.nn.elu, scope = 'mlp%d' % i, weights_initializer = W_init)
+                n = tf.contrib.layers.conv2d(n, mlp[i], [1, 1], padding = 'SAME', activation_fn = tf.nn.elu, scope = 'kernel/mlp%d' % i, weights_initializer = W_init)
+                n = batch_norm(n, 0.999, is_train, 'kernel/bn')
         
         if SN:
-            n = fc_as_conv_SN(n, channels * fCh, tf.nn.tanh, name = 'mlp_out' % i)
+            n = fc_as_conv_SN(n, channels * fCh, tf.nn.tanh, name = 'kernel/mlp_out')
         else:
-            n = tf.contrib.layers.conv2d(n, channels * fCh, [1, 1], padding = 'SAME', activation_fn = tf.nn.tanh, scope = 'mlp_out', weights_initializer = W_init)
-        # n = batch_norm(n, 0.999, global_is_train, 'bn')
+            n = tf.contrib.layers.conv2d(n, channels * fCh, [1, 1], padding = 'SAME', activation_fn = tf.nn.tanh, scope = 'kernel/mlp_out', weights_initializer = W_init)
+        
         cW = tf.reshape(n, [bs, Nx, k, channels, fCh])
         
         # Batch matmul won't work for more than 65535 matrices ???
         # n = tf.matmul(n, tf.reshape(neighbors, [bs, Nx, k, Cy, 1]))
         # Fallback solution
         if SN:
-            n = fc_as_conv_SN(neighbors, channels * fCh, None, name = 'feature_combine')
+            n = fc_as_conv_SN(neighbors, channels * fCh, None, name = 'feature/feature_combine')
         else:
-            n = tf.contrib.layers.conv2d(neighbors, channels * fCh, [1, 1], padding = 'SAME', activation_fn = None, scope = 'feature_combine', weights_initializer = W_init)
+            n = tf.contrib.layers.conv2d(neighbors, channels * fCh, [1, 1], padding = 'SAME', activation_fn = None, scope = 'feature/feature_combine', weights_initializer = W_init)
+            n = batch_norm(n, 0.999, is_train, 'feature/bn')
+
+        # MatMul
         n = tf.reshape(n, [bs, Nx, k, channels, fCh])
         n = tf.reduce_sum(tf.multiply(cW, n), axis = -1)
 
@@ -390,6 +402,26 @@ def bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act, channels, no_act_fin
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
+def kNNGPooling_farthest(inputs, pos, k):
+
+    # with tf.variable_scope(name):
+
+    bs = pos.shape[0]
+    N = pos.shape[1]
+    k = min(N, k)
+
+    idx = farthest_point_sample(k, pos) # [bs, k]
+
+    # Pick them
+    batches = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, k])
+    gather_idx = tf.stack([batches, idx], axis = -1)
+    pool_features = tf.gather_nd(inputs, gather_idx) # [bs, k, C]
+    pool_position = tf.gather_nd(pos, gather_idx) # [bs, k, 3]
+    
+    return pool_position, pool_features, 0.0, [], 0.0
+
+# Inputs: [bs, N, C]
+#    Pos: [bs, N, 3]
 def kNNGPooling_rand(inputs, pos, bs, N, k, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool'):
 
     with tf.variable_scope(name):
@@ -442,7 +474,7 @@ def kNNGPooling_GUnet(inputs, pos, k, masking = True, channels = 1, W_init = tf.
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
-def kNNGPooling_CAHQ(inputs, pos, k, kNNIdx, kNNEdg, laplacian, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False, act = tf.nn.relu, b_init = None):
+def kNNGPooling_CAHQ(inputs, pos, k, kNNIdx, kNNEdg, laplacian, is_train, masking = True, channels = 1, W_init = tf.truncated_normal_initializer(stddev=0.1), name = 'kNNGPool', stopGradient = False, act = tf.nn.relu, b_init = None):
 
     with tf.variable_scope(name):
 
@@ -468,7 +500,7 @@ def kNNGPooling_CAHQ(inputs, pos, k, kNNIdx, kNNEdg, laplacian, masking = True, 
             f = tf.reduce_mean(f, axis = 2) # [bs, N, 1]
             f = tf.contrib.layers.conv1d(f, 16, 1, padding = 'SAME', scope = 'mlp%d/ro/h1' % i)
             f = tf.contrib.layers.conv1d(f, 1,  1, padding = 'SAME', scope = 'mlp%d/ro/h2' % i)
-            f = batch_norm(f, 0.999, True, 'mlp%d/bn' % i)
+            f = batch_norm(f, 0.999, is_train, 'mlp%d/bn' % i)
             f = f + tmp
 
         y = tf.reshape(f, [bs, N])
@@ -555,7 +587,7 @@ def kNNGPooling_HighFreqLoss_GUnet(inputs, pos, k, laplacian, masking = True, ch
 def Conv1dWrapper(inputs, filters, kernel_size, stride, padding, act, W_init, b_init, bias = True, name = 'conv'):
 
     if SN:
-        return fc_as_conv_SN(inputs, filters, act, name = name)
+        return fc_as_conv_SN(inputs, filters, act, name = name), []
     else:
         with tf.variable_scope(name):
 
@@ -578,7 +610,7 @@ def Conv1dWrapper(inputs, filters, kernel_size, stride, padding, act, W_init, b_
 
             return y, variables
 
-def kNNGPosition_refine(input_position, input_feature, act, hidden = 128, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGPosRefine'):
+def kNNGPosition_refine(input_position, input_feature, refine_maxLength, act, hidden = 128, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGPosRefine'):
 
     with tf.variable_scope(name):
 
@@ -589,19 +621,23 @@ def kNNGPosition_refine(input_position, input_feature, act, hidden = 128, W_init
 
         assert N == input_feature.shape[1] and bs == input_feature.shape[0]
 
-        pos_feature, vars1 = Conv1dWrapper(tf.concat([input_position, input_feature], axis = -1), hidden, 1, 1, 'SAME', act, W_init, b_init, True, 'hidden')
-        pos_res, vars2 = Conv1dWrapper(pos_feature, pC, 1, 1, 'SAME', None, W_init, b_init, True, 'refine')
+        # pos_feature, vars1 = Conv1dWrapper(tf.concat([input_position, input_feature], axis = -1), hidden, 1, 1, 'SAME', act, W_init, b_init, True, 'hidden')
+        pos_res, v = Conv1dWrapper(input_feature, pC, 1, 1, 'SAME', None, W_init, b_init, True, 'refine') # [bs, N, pC]
+        pos_norm = tf.norm(pos_res, axis = -1, keepdims = True) # [bs, N, 1]
+        pos_norm_tun = tf.nn.tanh(pos_norm) * refine_maxLength
+        pos_res = pos_res / (pos_norm + 1) * pos_norm_tun
+        # pos_res *= refine_maxLength
 
         # tf.summary.histogram('Position_Refine_%s' % name, pos_res)
 
         refined_pos = tf.add(input_position, pos_res)
 
-        return refined_pos, [vars1, vars2]
+        return refined_pos, [v]
 
 def bip_kNNGConvBN_wrapper(Xs, Ys, kNNIdx, kNNEdg, batch_size, gridMaxSize, particle_hidden_dim, act, decay = 0.999, is_train = True, name = 'gconv', W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0)):
 
     with tf.variable_scope(name):
-        n, v = bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
+        n, v = bip_kNNGConvLayer_feature(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, is_train = is_train, W_init = W_init, b_init = b_init, name = 'gc')
         # n, v = bip_kNNGConvLayer_edgeMask(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
         # n, v = bip_kNNGConvLayer_concat(Xs, Ys, kNNIdx, kNNEdg, act = None, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
         # n, v = bip_kNNGConvLayer_concatMLP(Xs, Ys, kNNIdx, kNNEdg, act = act, no_act_final = True, channels = particle_hidden_dim, W_init = W_init, b_init = b_init, name = 'gc')
@@ -772,6 +808,8 @@ class model_particles:
             hd = self.particle_hidden_dim
             channels = [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(self.particle_latent_dim, hd * 2)]
             
+            res_count[4] = 6
+
             # ShapeNet_SingleVector
             # blocks = 5
             # particles_count = [self.gridMaxSize, 1920, 768, max(256, self.cluster_count * 2), self.cluster_count]
@@ -836,14 +874,15 @@ class model_particles:
                     prev_pos = gPos
                     # gPos, n, eval_func, v, fl = kNNGPooling_HighFreqLoss_GUnet(n, gPos, particles_count[i], MatL, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
                     # gPos, n, eval_func, v, fl = kNNGPooling_CAHQ(n, gPos, particles_count[i], gIdx, gEdg, MatL, masking = True, W_init = w_init, name = 'gpool%d' % i, stopGradient = True)
-                    gPos, n, eval_func, v, fl = kNNGPooling_rand(n, gPos, self.batch_size, particles_count[i-1], particles_count[i], MatL, masking = True, W_init = w_init, name = 'gpool%d' % i)
+                    #gPos, n, eval_func, v, fl = kNNGPooling_rand(n, gPos, self.batch_size, particles_count[i-1], particles_count[i], MatL, masking = True, W_init = w_init, name = 'gpool%d' % i)
+                    gPos, n, eval_func, v, fl = kNNGPooling_farthest(n, gPos, particles_count[i])
                     
                     # Single point
                     # if i == 4:
                     #     gPos = tf.zeros_like(gPos)
 
                     var_list.append(v)
-                    pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
+                    # pool_eval_func.append(tf.concat([prev_pos, tf.reshape(eval_func, [self.batch_size, particles_count[i-1], 1])], axis = -1))
 
                     pool_pos.append(gPos)
                     freq_loss = freq_loss + fl
@@ -853,7 +892,7 @@ class model_particles:
                     n, _ = bip_kNNGConvBN_wrapper(n, prev_n, bpIdx, bpEdg, self.batch_size, particles_count[i], channels[i], self.act, is_train = is_train, W_init = w_init, b_init = b_init, name = 'gpool%d/gconv' % i)
 
                 gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen%d' % i)
-                MatL, MatA, MatD = Laplacian(self.batch_size, particles_count[i], kernel_size[i], gIdx, name = 'gLaplacian%d' % i)
+                # MatL, MatA, MatD = Laplacian(self.batch_size, particles_count[i], kernel_size[i], gIdx, name = 'gLaplacian%d' % i)
 
                 for c in range(conv_count[i]):
 
@@ -1012,135 +1051,270 @@ class model_particles:
             
             else: # New approach, local generation, fold-refine blocks
                 
+                hd = self.particle_hidden_dim
+                ld = self.particle_latent_dim
+                _k = self.knn_k
+
+                # Single decoding stage
                 coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, self.cluster_count
                 blocks = 1
                 pcnt = [self.gridMaxSize] # particle count
-                generator = [4] # Generator depth
+                generator = [6] # Generator depth
                 refine = [0] # refine steps (each refine step = 1x res block (2x gconv))
+                refine_res = [1]
+                refine_maxLength = [0.6]
                 hdim = [self.particle_hidden_dim // 3]
                 fdim = [self.particle_latent_dim] # dim of features used for folding
-                # hdim = [self.particle_latent_dim]
-                # fdim = [self.particle_latent_dim]
                 gen_hdim = [self.particle_latent_dim]
                 knnk = [self.knn_k // 2]
+
+                # Multiple stacks
+                # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, self.cluster_count
+                # blocks = 2
+                # pcnt = [768, self.gridMaxSize] # particle count
+                # generator = [4, 3] # Generator depth
+                # refine = [2, 1] # refine steps (each refine step = 1x res block (2x gconv))
+                # hdim = [self.particle_hidden_dim, self.particle_hidden_dim // 3]
+                # fdim = [self.particle_latent_dim, self.particle_latent_dim] # dim of features used for folding
+                # gen_hdim = [self.particle_latent_dim, self.particle_latent_dim]
+                # knnk = [self.knn_k, self.knn_k // 2]
+                
+                # [fullFC_regular, fullGen_regular] Setup for full generator - fully-connected
+                # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, self.cluster_count
+                # blocks = 3
+                # pcnt = [256, 1280, self.gridMaxSize] # particle count
+                # generator = [4, 4, 4] # Generator depth
+                # refine = [2, 1, 1] # Regular setup
+                # refine_maxLength = [2.0, 1.0, 0.5]
+                # refine = [1, 0, 0] # variant / refine steps (each refine step = 1x res block (2x gconv))
+                # refine_res = [1, 1, 1]
+                # hdim = [hd * 2, hd, hd // 3]
+                # fdim = [ld, ld, ld // 2] # dim of features used for folding
+                # gen_hdim = [ld, ld, ld]
+                # knnk = [_k, _k, _k // 2]
+                
+                # [fullGen_shallow]
+                coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, self.cluster_count
+                blocks = 2
+                pcnt = [1280, self.gridMaxSize] # particle count
+                generator = [6, 3] # Generator depth
+                refine = [0, 0] # refine steps (each refine step = 1x res block (2x gconv))
+                refine_res = [1, 1]
+                hdim = [self.particle_hidden_dim, self.particle_hidden_dim // 3]
+                fdim = [self.particle_latent_dim, self.particle_latent_dim] # dim of features used for folding
+                gen_hdim = [self.particle_latent_dim, self.particle_latent_dim]
+                knnk = [self.knn_k, self.knn_k // 2]
 
                 pos_range = 3
 
                 gen_only = []
 
+                regularizer = 0.0
+
                 for bi in range(blocks):
 
                     with tf.variable_scope('gr%d' % bi):
-
-                        # Folding stage
-                        fold_particles_count = pcnt[bi] - coarse_cnt
+ 
+                        if True: # Fully-connected generator (Non-distribution-based) & Full generators (pcnt[bi] instead of pcnt[bi] - coarse_cnt
                         
-                        # Mixture
-                        mix = tf.random.uniform([self.batch_size, fold_particles_count, 1], maxval = coarse_cnt, dtype = tf.int32)
+                            # Check for good setups
+                            assert pcnt[bi] % coarse_cnt == 0
 
-                        # Coarse graph: [bs, coarse_cnt, coarse_hdim]
-                        bs_idx = tf.broadcast_to(tf.reshape(tf.range(self.batch_size), [self.batch_size, 1, 1]), [self.batch_size, fold_particles_count, 1])
-                        gather_idx = tf.concat([bs_idx, mix], axis = -1)
-                        origin_pos = tf.gather_nd(coarse_pos, gather_idx)
-                        origin_fea = tf.gather_nd(coarse_fea, gather_idx)
+                            n_per_cluster = pcnt[bi] // coarse_cnt
 
-                        z = tf.random.uniform([self.batch_size, fold_particles_count, fdim[bi] * 2], minval = -1., maxval = 1., dtype = default_dtype)
+                            if False: # fc
+                                n = coarse_fea
+                                for gi in range(generator[bi]):
+                                    with tf.variable_scope('gen%d' % gi):
+                                        n, v = Conv1dWrapper(n, fdim[bi], 1, 1, 'SAME', None, w_init, b_init, True, 'fc')
+                                        n = batch_norm(n, 0.999, is_train, name = 'norm')
+                                        n = self.act(n)
+                                n, v = Conv1dWrapper(n, pos_range * n_per_cluster, 1, 1, 'SAME', None, w_init, b_init, True, 'gen_out')
+                                n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
 
-                        if False: # Fuse feature to every layer, maybe stupid...?
-                            for gi in range(generator[bi]):
+                                # Back to world space
+                                n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
                                 
-                                with tf.variable_scope('gen%d' % gi):
-                                    fuse_fea, v = Conv1dWrapper(origin_fea, fdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'feaFuse')
+                                ap = tf.reshape(n, [self.batch_size, pcnt[bi], pos_range])
+
+                            else: # generator
+                                z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                                fuse_fea, v = Conv1dWrapper(coarse_fea, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'feaFuse')
+                                z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
+                                
+                                n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
+                                
+                                for gi in range(generator[bi]):
+                                    with tf.variable_scope('gen%d' % gi):
+                                        n, v = Conv1dWrapper(n, fdim[bi], 1, 1, 'SAME', None, w_init, b_init, True, 'fc')
+                                        n = batch_norm(n, 0.999, is_train, name = 'norm')
+                                        n = self.act(n)
+                                n, v = Conv1dWrapper(n, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen_out')
+                                n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+
+                                # Back to world space
+                                n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
+                                
+                                ap = tf.reshape(n, [self.batch_size, pcnt[bi], pos_range])
+
+                            # General operations for full generators
+                            gen_only.append(ap)
+
+                            # Empty feature
+                            # n = tf.zeros([self.batch_size, pcnt[bi], 1], dtype = default_dtype)
+
+                            # Outputs of this stage
+                            pos = ap
+                            # n = n
+
+                        else:
+                            
+                            # Folding stage
+                            fold_particles_count = pcnt[bi] - coarse_cnt
+                            
+                            # Mixture
+                            mix = tf.random.uniform([self.batch_size, fold_particles_count, 1], maxval = coarse_cnt, dtype = tf.int32)
+
+                            # Coarse graph: [bs, coarse_cnt, coarse_hdim]
+                            bs_idx = tf.broadcast_to(tf.reshape(tf.range(self.batch_size), [self.batch_size, 1, 1]), [self.batch_size, fold_particles_count, 1])
+                            gather_idx = tf.concat([bs_idx, mix], axis = -1)
+                            origin_pos = tf.gather_nd(coarse_pos, gather_idx)
+                            origin_fea = tf.gather_nd(coarse_fea, gather_idx)
+
+                            z = tf.random.uniform([self.batch_size, fold_particles_count, fdim[bi] * 2], minval = -1., maxval = 1., dtype = default_dtype)
+
+                            if False: # Fuse feature to every layer, maybe stupid...?
+                                for gi in range(generator[bi]):
                                     
-                                    z = tf.concat([z, fuse_fea], axis = -1)
-                                    z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
-                                    z = batch_norm(z, 0.999, is_train, name = 'bn')
-                                    z = self.act(z)
+                                    with tf.variable_scope('gen%d' % gi):
+                                        fuse_fea, v = Conv1dWrapper(origin_fea, fdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'feaFuse')
+                                        
+                                        z = tf.concat([z, fuse_fea], axis = -1)
+                                        z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
+                                        z = batch_norm(z, 0.999, is_train, name = 'bn')
+                                        z = self.act(z)
 
-                        elif True: # Regular small generator
-                            fuse_fea, v = Conv1dWrapper(origin_fea, fdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'feaFuse')
-                            z = tf.concat([z, fuse_fea], axis = -1)
+                            elif False: # Regular small generator
+                                fuse_fea, v = Conv1dWrapper(origin_fea, fdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'feaFuse')
+                                z = tf.concat([z, fuse_fea], axis = -1)
 
-                            for gi in range(generator[bi]):
-                                with tf.variable_scope('gen%d' % gi):
-                                    z, v = Conv1dWrapper(z, 2 * fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
-                                    # z = batch_norm(z, 0.999, is_train, name = 'bn')
-                                    z = self.act(z)
+                                for gi in range(generator[bi]):
+                                    with tf.variable_scope('gen%d' % gi):
+                                        z, v = Conv1dWrapper(z, 2 * fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
+                                        z = batch_norm(z, 0.999, is_train, name = 'bn')
+                                        z = self.act(z)
+                                
+                                z, v = Conv1dWrapper(z, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen/fc_out') 
                             
-                            z, v = Conv1dWrapper(z, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen/fc_out')
+                            else: # Advanced conditioned small generator
+                                
+                                with tf.variable_scope('weight_gen'):
+                                    l, v = Conv1dWrapper(origin_fea, gen_hdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'mlp1')
+                                    l = batch_norm(l, 0.999, is_train, name = 'mlp1/bn')
+                                    l, v = Conv1dWrapper(l, gen_hdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'mlp2')
+                                    l = batch_norm(l, 0.999, is_train, name = 'mlp2/bn')
+                                    w, v = Conv1dWrapper(l, pos_range * fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'mlp_weights_out')
+                                    b, v = Conv1dWrapper(l, pos_range, 1, 1, 'SAME', None, w_init_fold, b_init, True, 'mlp_bias_out')
+                                    t, v = Conv1dWrapper(l, pos_range * pos_range, 1, 1, 'SAME', None, w_init_fold, b_init, True, 'mlp_transform_out')
+                                    w = tf.reshape(w, [self.batch_size, fold_particles_count, fdim[bi], pos_range])
+                                    w = tf.nn.softmax(w, axis = 2)
+                                    t = tf.reshape(t, [self.batch_size, fold_particles_count, pos_range, pos_range])
 
-                        else: # Advanced conditioned small generator
-                            
-                            with tf.variable_scope('weight_gen'):
-                                w, v = Conv1dWrapper(origin_fea, gen_hdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'mlp1')
-                                w, v = Conv1dWrapper(origin_fea, gen_hdim[bi], 1, 1, 'SAME', self.act, w_init_fold, b_init, True, 'mlp2')
-                                w, v = Conv1dWrapper(w, pos_range * fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'mlp_weights_out')
-                                b, v = Conv1dWrapper(w, pos_range, 1, 1, 'SAME', None, w_init_fold, b_init, True, 'mlp_bias_out')
-                                w = tf.reshape(w, [self.batch_size, fold_particles_count, fdim[bi], pos_range])
-                                # w = tf.nn.softmax(w, axis = 2)
+                                    # Entropy loss
+                                    entropy = tf.reduce_mean(-tf.reduce_sum(w * tf.log(w + 1e-4), axis = 2)) # We want minimize entropy of W
+                                    tf.summary.scalar('entropy', entropy)
+                                    regularizer += entropy * 0.1
+                                    # Ortho of t?
 
-                            z = tf.random.uniform([self.batch_size, fold_particles_count, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                                z = tf.random.uniform([self.batch_size, fold_particles_count, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
 
-                            for gi in range(generator[bi]):
-                                with tf.variable_scope('gen%d' % gi):
-                                    z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
-                                    z = batch_norm(z, 0.999, is_train, name = 'bn')
-                                    z = self.act(z)
-                            z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc_final')
-                            z = tf.multiply(w, tf.reshape(z, [self.batch_size, fold_particles_count, fdim[bi], 1]))
-                            z = tf.reduce_sum(z, axis = 2)
-                            z = z + b
+                                for gi in range(generator[bi]):
+                                    with tf.variable_scope('gen%d' % gi):
+                                        z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc')
+                                        z = batch_norm(z, 0.999, is_train, name = 'bn')
+                                        z = self.act(z)
+                                z, v = Conv1dWrapper(z, fdim[bi], 1, 1, 'SAME', None, w_init_fold, b_init, True, 'fc_final')
+                                
+                                # Collect features
+                                z = tf.multiply(w, tf.reshape(z, [self.batch_size, fold_particles_count, fdim[bi], 1]))
+                                z = tf.reduce_sum(z, axis = 2)
+                                z = z + b
 
-                        # ap, v = Conv1dWrapper(z, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen/fc_out')
-                        ap = z
-                        ap = ap + origin_pos # ap is alter_particles
+                                # Linear transformation
+                                z = tf.multiply(t, tf.reshape(z, [self.batch_size, fold_particles_count, pos_range, 1]))
+                                z = tf.reduce_sum(z, axis = 2)
 
-                        gen_only.append(tf.concat([ap, coarse_pos], axis = 1))
+                            # ap, v = Conv1dWrapper(z, pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'gen/fc_out')
+                            ap = z
+                            ap = ap + origin_pos # ap is alter_particles
 
-                        # Position refinement stage
-                        # Bipartite graph
-                        posAlter, posRefer, gp_idx, gp_edg = bip_kNNG_gen(ap, coarse_pos, knnk[bi], pos_range, name = 'bi_ggen_pre')
-                        # Empty feature
-                        n = tf.zeros([self.batch_size, fold_particles_count, 1], dtype = default_dtype)
-                        n, v = bip_kNNGConvBN_wrapper(n, coarse_fea, gp_idx, gp_edg, self.batch_size, fold_particles_count, hdim[bi], self.act, is_train = is_train, name = 'bip/conv', W_init = w_init)
-                        gen_features = n
+                            gen_only.append(tf.concat([ap, coarse_pos], axis = 1))
 
-                        # Existing features
-                        n, v = Conv1dWrapper(coarse_fea, hdim[bi], 1, 1, 'SAME', self.act, w_init, b_init, True, 'pre/conv')
-                        ref_features = n
+                            # Position refinement stage
+                            # Bipartite graph
+                            posAlter, posRefer, gp_idx, gp_edg = bip_kNNG_gen(ap, coarse_pos, knnk[bi], pos_range, name = 'bi_ggen_pre')
+                            # Empty feature
+                            n = tf.zeros([self.batch_size, fold_particles_count, 1], dtype = default_dtype)
+                            n, v = bip_kNNGConvBN_wrapper(n, coarse_fea, gp_idx, gp_edg, self.batch_size, fold_particles_count, hdim[bi], self.act, is_train = is_train, name = 'bip/conv', W_init = w_init)
+                            gen_features = n
 
-                        # Combine to get graph
-                        pos = tf.concat([posRefer, posAlter], axis = 1)
-                        n = tf.concat([ref_features, gen_features], axis = 1)
+                            # Existing features
+                            n, v = Conv1dWrapper(coarse_fea, hdim[bi], 1, 1, 'SAME', self.act, w_init, b_init, True, 'pre/conv')
+                            ref_features = n
+
+                            # Combine to get graph
+                            pos = tf.concat([posRefer, posAlter], axis = 1)
+                            n = tf.concat([ref_features, gen_features], axis = 1)
+
+                        ### General part for full and partial generators
 
                         # Position Refinement
+
+                        # get feature
+                        # Bipartite graph
+                        posAlter, posRefer, gp_idx, gp_edg = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bi_ggen_gRefine')
+                        # Empty feature
+                        n = tf.zeros([self.batch_size, pcnt[bi], 1], dtype = default_dtype)
+                        n, v = bip_kNNGConvBN_wrapper(n, coarse_fea, gp_idx, gp_edg, self.batch_size, pcnt[bi], hdim[bi], self.act, is_train = is_train, name = 'gRefine/bip/conv', W_init = w_init)
+
                         # refine_loops = 0
-                        refine_res_blocks = 1
+                        refine_res_blocks = refine_res[bi]
                         vars_loop = []
 
                         for r in range(refine[bi]):
                         
-                            _, gr_idx, gr_edg = kNNG_gen(pos, self.knn_k // 3, 3, name = 'grefine%d/ggen' % r)
+                            _, gr_idx, gr_edg = kNNG_gen(pos, knnk[bi], 3, name = 'grefine%d/ggen' % r)
                             tmp = n
 
                             for i in range(refine_res_blocks):
                                 
                                 # Convolution
-                                nn, v = kNNGConvBN_wrapper(n, gr_idx, gr_edg, self.batch_size, self.gridMaxSize, hdim[bi], self.act, is_train = is_train, name = 'gr%d/gloop%d/gconv1' % (r, i), W_init = w_init, b_init = b_init)
+                                nn, v = kNNGConvBN_wrapper(n, gr_idx, gr_edg, self.batch_size, pcnt[bi], hdim[bi], self.act, is_train = is_train, name = 'gr%d/gloop%d/gconv1' % (r, i), W_init = w_init, b_init = b_init)
                                 vars_loop.append(v)
                                 
-                                nn, v = kNNGConvBN_wrapper(nn, gr_idx, gr_edg, self.batch_size, self.gridMaxSize, hdim[bi], self.act, is_train = is_train, name = 'gr%d/gloop%d/gconv2' % (r, i), W_init = w_init, b_init = b_init)
+                                nn, v = kNNGConvBN_wrapper(nn, gr_idx, gr_edg, self.batch_size, pcnt[bi], hdim[bi], self.act, is_train = is_train, name = 'gr%d/gloop%d/gconv2' % (r, i), W_init = w_init, b_init = b_init)
                                 vars_loop.append(v)
 
                                 n = n + nn
 
                             n = n + tmp
-                            pos, v = kNNGPosition_refine(pos, n, self.act, W_init = w_init_pref, b_init = b_init, name = 'gr%d/grefine/refine' % r)
+                            pos, v = kNNGPosition_refine(pos, n, refine_maxLength[bi], self.act, W_init = w_init_pref, b_init = b_init, name = 'gr%d/grefine/refine' % r)
                             vars_loop.append(v)
+
+                        # get feature
+                        # Bipartite graph
+                        posAlter, posRefer, gp_idx, gp_edg = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bi_ggen_featureEx')
+                        # Empty feature
+                        n = tf.zeros([self.batch_size, pcnt[bi], 1], dtype = default_dtype)
+                        n, v = bip_kNNGConvBN_wrapper(n, coarse_fea, gp_idx, gp_edg, self.batch_size, pcnt[bi], hdim[bi], self.act, is_train = is_train, name = 'featureEx/bip/conv', W_init = w_init)
+
+                        _, gidx, gedg = kNNG_gen(pos, knnk[bi], 3, name = 'featureEx/ggen')
+                        n, v = kNNGConvBN_wrapper(n, gidx, gedg, self.batch_size, pcnt[bi], hdim[bi], self.act, is_train = is_train, name = 'featureEx/gconv1', W_init = w_init, b_init = b_init)
+                        n, v = kNNGConvBN_wrapper(n, gidx, gedg, self.batch_size, pcnt[bi], hdim[bi], self.act, is_train = is_train, name = 'featureEx/gconv2', W_init = w_init, b_init = b_init)
 
                         coarse_pos = pos
                         coarse_fea = n
-                        coarse_cnt = pcnt
+                        coarse_cnt = pcnt[bi]
 
                 final_particles = coarse_pos
                 n = coarse_fea
@@ -1148,7 +1322,10 @@ class model_particles:
                 if output_dim > pos_range:
                     n, _ = Conv1dWrapper(n, output_dim - pos_range, 1, 1, 'SAME', None, w_init, b_init, True, 'finalConv')
                     final_particles = tf.concat([pos, n], -1)
-                return 0, [final_particles, gen_only[0]], 0
+
+                regularizer = regularizer / blocks
+
+                return 0, [final_particles, gen_only[0]], 0, regularizer
 
     def simulator(self, pos, particles, name = 'Simluator', is_train = True, reuse = False):
 
@@ -1277,40 +1454,79 @@ class model_particles:
         tf.assign(ref, value)
         return 0
 
-    def chamfer_metric(self, particles, groundtruth, pos_range, loss_func):
+    def chamfer_metric(self, particles, groundtruth, pos_range, loss_func, EMD = False):
+        
+        if EMD == True:
             
-        # test - shuffle the groundtruth and calculate the loss
-        # rec_particles = tf.stack(list(map(lambda x: tf.random.shuffle(x), tf.unstack(self.ph_X[:, :, 0:6]))))
-        # rec_particles = tf.random.uniform([self.batch_size, self.gridMaxSize, 3], minval = -1.0, maxval = 1.0)
-
-        bs = groundtruth.shape[0]
-        Np = particles.shape[1]
-        Ng = groundtruth.shape[1]
-
-        assert groundtruth.shape[2] == particles.shape[2]
-
-        # NOTE: current using position (0:3) only here for searching nearest point.
-        row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, Np, 1, pos_range])
-        col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, Ng, pos_range])
-        # distance = tf.norm(row_predicted - col_groundtru, ord = 'euclidean', axis = -1)
-        distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
+            bs = groundtruth.shape[0]
+            Np = particles.shape[1]
+            Ng = groundtruth.shape[1]
+            
+            match = approx_match(groundtruth, particles) # [bs, Np, Ng]
+            row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, Np, 1, pos_range])
+            col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, Ng, pos_range])
+            distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
+            distance = distance * match
+            distance_loss = tf.reduce_mean(tf.reduce_sum(distance, axis = -1))
         
-        rearrange_predicted_N = tf.argmin(distance, axis = 1, output_type = tf.int32)
-        rearrange_groundtru_N = tf.argmin(distance, axis = 2, output_type = tf.int32)
-        
-        batch_subscriptG = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, Ng])
-        batch_subscriptP = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, Np])
-        rearrange_predicted = tf.stack([batch_subscriptG, rearrange_predicted_N], axis = 2)
-        rearrange_groundtru = tf.stack([batch_subscriptP, rearrange_groundtru_N], axis = 2)
+        else:
+            
+            # test - shuffle the groundtruth and calculate the loss
+            # rec_particles = tf.stack(list(map(lambda x: tf.random.shuffle(x), tf.unstack(self.ph_X[:, :, 0:6]))))
+            # rec_particles = tf.random.uniform([self.batch_size, self.gridMaxSize, 3], minval = -1.0, maxval = 1.0)
 
-        nearest_predicted = tf.gather_nd(  particles[:, :, :], rearrange_predicted)
-        nearest_groundtru = tf.gather_nd(groundtruth[:, :, :], rearrange_groundtru)
+            bs = groundtruth.shape[0]
+            Np = particles.shape[1]
+            Ng = groundtruth.shape[1]
 
-        chamfer_loss =\
-            tf.reduce_mean(loss_func(tf.cast(        particles, tf.float32) - tf.cast(nearest_groundtru, tf.float32))) +\
-            tf.reduce_mean(loss_func(tf.cast(nearest_predicted, tf.float32) - tf.cast(groundtruth      , tf.float32)))
+            assert groundtruth.shape[2] == particles.shape[2]
+
+            # NOTE: current using position (0:3) only here for searching nearest point.
+            row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, Np, 1, pos_range])
+            col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, Ng, pos_range])
+            # distance = tf.norm(row_predicted - col_groundtru, ord = 'euclidean', axis = -1)
+            distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
+            
+            rearrange_predicted_N = tf.argmin(distance, axis = 1, output_type = tf.int32)
+            rearrange_groundtru_N = tf.argmin(distance, axis = 2, output_type = tf.int32)
+            
+            batch_subscriptG = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, Ng])
+            batch_subscriptP = tf.broadcast_to(tf.reshape(tf.range(bs), [bs, 1]), [bs, Np])
+            rearrange_predicted = tf.stack([batch_subscriptG, rearrange_predicted_N], axis = 2)
+            rearrange_groundtru = tf.stack([batch_subscriptP, rearrange_groundtru_N], axis = 2)
+
+            nearest_predicted = tf.gather_nd(  particles[:, :, :], rearrange_predicted)
+            nearest_groundtru = tf.gather_nd(groundtruth[:, :, :], rearrange_groundtru)
+
+            if loss_func == tf.abs:
+                distance_loss =\
+                    tf.reduce_mean(loss_func(tf.cast(        particles, tf.float32) - tf.cast(nearest_groundtru, tf.float32))) +\
+                    tf.reduce_mean(loss_func(tf.cast(nearest_predicted, tf.float32) - tf.cast(groundtruth      , tf.float32)))
+            else:
+                distance_loss =\
+                    tf.reduce_mean(tf.sqrt(tf.reduce_sum(loss_func(tf.cast(        particles, tf.float32) - tf.cast(nearest_groundtru, tf.float32)), axis = -1))) +\
+                    tf.reduce_mean(tf.sqrt(tf.reduce_sum(loss_func(tf.cast(nearest_predicted, tf.float32) - tf.cast(      groundtruth, tf.float32)), axis = -1)))
+
+        return tf.cast(distance_loss, default_dtype)
+
+    # pos [bs, N, pRange]
+    # imp [bs, N]
+    # FIXME: this is not good ...
+    def pool_coverage(self, pos, importance, evaluation, k, ctrlRange = 0.01, falloff = 2.0, smin = 64.0, eplison = 1e-5):
+
+        bs = pos.shape[0]
+        N  = pos.shape[1]
+        pr = pos.shape[2]
+
+        rx = 1.0 / (ctrlRange / 1.0)
+        row = tf.reshape(pos, [bs, N, 1, pr])
+        col = tf.reshape(pos, [bs, 1, N, pr])
+        dist = tf.sqrt(tf.add_n(tf.unstack(tf.square(row - col), axis = -1)))
+        subCover = tf.pow(tf.nn.tanh(1.0 / (rx * dist + eplison)), falloff)
         
-        return tf.cast(chamfer_loss, default_dtype)
+        # normalize importance, fake k-max
+        importance = k * importance / tf.reduce_sum(importance, axis = -1, keepdims = True)
+        importance = tf.pow(importance, 4.0)
 
     def custom_dtype_getter(self, getter, name, shape=None, dtype=default_dtype, *args, **kwargs):
         
@@ -1342,6 +1558,7 @@ class model_particles:
             
             var_list = []
             floss = 0
+            regularizer = 0
 
             # Enc(X)
             posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
@@ -1356,7 +1573,7 @@ class model_particles:
                 var_list.append(_v)
                 floss += _floss
                 encY = tf.concat([posY, feaY], -1)
-                tf.summary.histogram('Encoded Y', encY)
+                # tf.summary.histogram('Encoded Y', encY)
                 
                 if loopSim == True:
 
@@ -1367,7 +1584,7 @@ class model_particles:
                     encL = tf.concat([posL, feaL], -1)
 
 
-            tf.summary.histogram('Clusters X', posX)
+            # tf.summary.histogram('Clusters X', posX)
 
             outDim = self.outDim
             
@@ -1384,15 +1601,17 @@ class model_particles:
                 simY  = tf.concat([ sim_posY,  sim_feaY], -1)
                 simYX = tf.concat([sim_posYX, sim_feaYX], -1)
                 
-                tf.summary.histogram('simulated Y', simY)
+                # tf.summary.histogram('simulated Y', simY)
 
                 # Decoders
                 # _, [rec_YX, _], _ = self.particleDecoder(sim_posYX, sim_feaYX, self.ph_card, 6, True, reuse)
                 # _, [ rec_Y, _], _ = self.particleDecoder( sim_posY,  sim_feaY, self.ph_card, 6, True,  True)
-                _, [rec_YX, fold_X], _ = self.particleDecoder( posX, feaX, self.ph_card, outDim, True, reuse)
-                _, [ rec_Y, _], _ = self.particleDecoder( posY, feaY, self.ph_card, outDim, True,  True)
+                _, [rec_YX, fold_X], _, r = self.particleDecoder( posX, feaX, self.ph_card, outDim, True, reuse)
+                regularizer += r * 0.5
+                _, [ rec_Y, _], _, r = self.particleDecoder( posY, feaY, self.ph_card, outDim, True,  True)
+                regularizer += r * 0.5
 
-                tf.summary.histogram('Reconstructed X (from SInv(Y))', rec_YX[:, :, 0:3])
+                # tf.summary.histogram('Reconstructed X (from SInv(Y))', rec_YX[:, :, 0:3])
                 
                 if loopSim == True:
 
@@ -1409,14 +1628,19 @@ class model_particles:
                     simL  = tf.concat([ sim_posL,  sim_feaL], -1)
                     simLX = tf.concat([sim_posLX, sim_feaLX], -1)
                     
-                    _, [rec_LX, _], _ = self.particleDecoder(sim_posLX, sim_feaLX, self.ph_card, outDim, True,  True)
+                    _, [rec_LX, _], _, r = self.particleDecoder(sim_posLX, sim_feaLX, self.ph_card, outDim, True,  True)
+                    regularizer += r * 0.5
                     # _, [ rec_L, _], _ = self.particleDecoder( sim_posL,  sim_feaL, self.ph_card, outDim, True,  True)
-                    _, [ rec_L, _], _ = self.particleDecoder( posL,  feaL, self.ph_card, outDim, True,  True)
+                    _, [ rec_L, _], _, r = self.particleDecoder( posL,  feaL, self.ph_card, outDim, True,  True)
+                    regularizer += r * 0.5
+                    
+                    regularizer *= 0.5
             
             else:
 
-                _, [rec_X, fold_X], _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, True, reuse)
-                tf.summary.histogram('Reconstructed X (from X)', rec_X[:, :, 0:3])
+                _, [rec_X, fold_X], _, r = self.particleDecoder(posX, feaX, self.ph_card, outDim, True, reuse)
+                regularizer += r
+                # tf.summary.histogram('Reconstructed X (from X)', rec_X[:, :, 0:3])
 
         reconstruct_loss = 0.0
         simulation_loss  = 0.0
@@ -1470,14 +1694,16 @@ class model_particles:
 
             else:
 
-                reconstruct_loss += self.chamfer_metric(rec_X[:, self.cluster_count:, 0:outDim], normalized_X[:, :, 0:outDim], 3, self.loss_func)
+                reconstruct_loss += self.chamfer_metric(rec_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                # reconstruct_loss += self.chamfer_metric(rec_X[:, self.cluster_count:, 0:outDim], normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
                 reconstruct_loss *= 40.0
-                raw_error = self.chamfer_metric(rec_X, normalized_X[:, :, 0:outDim], 3, tf.abs) * 40.0
+                raw_error = 0.0
+                # raw_error = self.chamfer_metric(rec_X, normalized_X[:, :, 0:outDim], 3, tf.abs) * 40.0
         
         # reconstruct_loss += self.chamfer_metric(fold_X[:, :, 0:3], normalized_X[:, :, 0:3], 3, self.loss_func) * 40.0
         # reconstruct_loss *= 0.5
 
-        hqpool_loss = 0.01 * tf.reduce_mean(floss)
+        hqpool_loss = 0.01 * tf.reduce_mean(floss) + regularizer
         # hqpool_loss = 0.0
         
         if includeSim == True:
@@ -1533,10 +1759,10 @@ class model_particles:
 
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
-            _, [rec, rec_f], _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train, reuse)
+            _, [rec, rec_f], _, _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train, reuse)
 
         rec = rec
-        reconstruct_loss = self.chamfer_metric(rec, gt, 3, self.loss_func) * 40.0
+        reconstruct_loss = self.chamfer_metric(rec, gt, 3, self.loss_func, True) * 40.0
 
         return rec * self.normalize, rec_f * self.normalize, reconstruct_loss
 
@@ -1547,20 +1773,24 @@ class model_particles:
         self.particle_vars, self.train_error =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
-        # self.val_particleRawLoss, self.val_particleCardLoss, _, _, _ =\
-        #     self.build_network(False, True)
+        self.val_particleRecLoss, self.val_particleSimLoss, _, _, _, self.val_error =\
+            self.build_network(False, True, self.doLoop, self.doSim)
 
         # self.train_particleLoss = self.train_particleCardLoss
         # self.val_particleLoss = self.val_particleCardLoss
 
         self.train_particleLoss = self.train_particleRecLoss + self.train_particleSimLoss + self.train_HQPLoss + self.train_PALoss
+        self.val_particleLoss = self.val_particleRecLoss
         # self.train_particleLoss = self.train_particleCardLoss + 100 * self.train_particleRawLoss
         # self.val_particleLoss = self.val_particleRawLoss
         # self.val_particleLoss = self.val_particleCardLoss + 100 * self.val_particleRawLoss
 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            self.train_op = self.optimizer.minimize(self.train_particleLoss)
+            gvs = self.optimizer.compute_gradients(self.train_particleLoss)
+            capped_gvs = [(tf.clip_by_value(grad, -1., 1.) if grad is not None else None, var) for grad, var in gvs]
+            # self.train_op = self.optimizer.minimize(self.train_particleLoss)
+            self.train_op = self.optimizer.apply_gradients(capped_gvs)
         
         # self.train_op = self.optimizer.minimize(self.train_particleLoss, var_list = self.particle_vars)
         # self.train_op = tf.constant(0, shape=[10, 10])

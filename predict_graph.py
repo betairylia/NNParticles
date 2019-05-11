@@ -235,12 +235,13 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
         if args.dosim:
             groundTruth[sidx:eidx, :, :] = _x[1][:, :, 0:outDim]
         reconstruct[sidx:eidx, :, :] = _rec[:, :, 0:outDim]
-        fold[sidx:eidx, :, :] = _recf[:, :, 0:outDim]
+        # fold[sidx:eidx, :, :] = _recf[:, :, 0:outDim]
 
         if not args.dosim:
             for i in range(len(pX)):
-                pools[i][sidx:eidx] = pX[i]
-                evals[i][sidx:eidx] = eX[i]
+                pass
+                # pools[i][sidx:eidx] = pX[i]
+                # evals[i][sidx:eidx] = eX[i]
 
         if args.dosim:
             clusters_X[ sidx:eidx, :, :] = _cpos_x[:, :, 0:pRange] * 48.0
