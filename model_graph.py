@@ -682,7 +682,7 @@ class model_particles:
         self.resSize = 1
         self.batch_size = batch_size
         self.knn_k = 16
-        self.useVector = True
+        self.useVector = False
 
         self.doSim = True
         self.doLoop = True
