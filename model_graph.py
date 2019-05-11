@@ -682,6 +682,7 @@ class model_particles:
         self.resSize = 1
         self.batch_size = batch_size
         self.knn_k = 16
+        self.useVector = True
 
         self.doSim = True
         self.doLoop = True
@@ -916,6 +917,13 @@ class model_particles:
             n, v = Conv1dWrapper(n, self.cluster_feature_dim, 1, 1, 'SAME', None, w_init, b_init, True, 'convOut')
             var_list.append(v)
             
+            if self.useVector == True:
+                zeroPos = tf.zeros([self.batch_size, 1, 3])
+                _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
+                n, _ = bip_kNNGConvBN_wrapper(tf.zeros_like(zeroPos), n, bpIdx, bpEdg, self.batch_size, 1, 512, self.act, is_train = is_train, W_init = w_init, b_init = b_init, name = 'globalPool/gconv')
+                n = fc_as_conv_SN(n, 512, name = 'globalPool/fc')
+                gPos = zeroPos
+
             if returnPool == True:
                 return gPos, n, var_list, pool_pos, freq_loss, pool_eval_func
 
@@ -1094,16 +1102,29 @@ class model_particles:
                 # knnk = [_k, _k, _k // 2]
                 
                 # [fullGen_shallow]
-                coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, self.cluster_count
-                blocks = 2
-                pcnt = [1280, self.gridMaxSize] # particle count
-                generator = [6, 3] # Generator depth
-                refine = [0, 0] # refine steps (each refine step = 1x res block (2x gconv))
-                refine_res = [1, 1]
-                hdim = [self.particle_hidden_dim, self.particle_hidden_dim // 3]
-                fdim = [self.particle_latent_dim, self.particle_latent_dim] # dim of features used for folding
-                gen_hdim = [self.particle_latent_dim, self.particle_latent_dim]
-                knnk = [self.knn_k, self.knn_k // 2]
+                # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, self.cluster_count
+                # blocks = 2
+                # pcnt = [1280, self.gridMaxSize] # particle count
+                # generator = [6, 3] # Generator depth
+                # refine = [0, 0] # refine steps (each refine step = 1x res block (2x gconv))
+                # refine_res = [1, 1]
+                # hdim = [self.particle_hidden_dim, self.particle_hidden_dim // 3]
+                # fdim = [self.particle_latent_dim, self.particle_latent_dim] # dim of features used for folding
+                # gen_hdim = [self.particle_latent_dim, self.particle_latent_dim]
+                # knnk = [self.knn_k, self.knn_k // 2]
+
+                if self.useVector == True:
+                    blocks += 1
+                    pcnt = [coarse_cnt] + pcnt
+                    coarse_cnt = 1
+                    generator = [4] + generator
+                    refine = [0] + refine
+                    refine_res = [1] + refine_res
+                    refine_maxLength = [1.0] + refine_maxLength
+                    hdim = [self.particle_hidden_dim] + hdim
+                    fdim = [512] + fdim
+                    gen_hdim = [512] + gen_hdim
+                    knnk = [self.knn_k] + knnk
 
                 pos_range = 3
 
