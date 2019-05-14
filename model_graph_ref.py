@@ -161,7 +161,7 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, is_tra
         n = kNNEdg
         for i in range(len(mlp)):
             n = autofc(n, mlp[i], tf.nn.elu, name = 'kernel/mlp%d' % i)
-            n = norm(n, 0.999, is_train, 'kernel/norm')
+            # n = norm(n, 0.999, is_train, 'kernel/norm')
         
         n = autofc(n, channels * fCh, tf.nn.tanh, name = 'kernel/mlp_out')
         
@@ -380,7 +380,7 @@ class model_particles:
             # We are going to use a way deeper model than before. Please refer to model_particlesTest_backup.py for original codes.
             
             # ShapeNet_regular_featureSqz
-            blocks = 3
+            blocks = 5
             particles_count = [self.gridMaxSize, 1920, 768, max(256, self.cluster_count * 2), self.cluster_count]
             conv_count = [1, 2, 2, 0, 0]
             res_count = [0, 0, 0, 1, 2]
@@ -525,17 +525,17 @@ class model_particles:
                 gen_hdim = [512, self.particle_latent_dim]
                 knnk = [self.knn_k, self.knn_k // 2]
                 
-                coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
-                blocks = 1
-                pcnt = [self.gridMaxSize] # particle count
-                generator = [6] # Generator depth
-                maxLen = [None]
-                nConv = [0]
-                nRes = [0]
-                hdim = [self.particle_hidden_dim // 3]
-                fdim = [self.particle_latent_dim] # dim of features used for folding
-                gen_hdim = [self.particle_latent_dim]
-                knnk = [self.knn_k // 2]
+                # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
+                # blocks = 1
+                # pcnt = [self.gridMaxSize] # particle count
+                # generator = [6] # Generator depth
+                # maxLen = [None]
+                # nConv = [0]
+                # nRes = [0]
+                # hdim = [self.particle_hidden_dim // 3]
+                # fdim = [self.particle_latent_dim] # dim of features used for folding
+                # gen_hdim = [self.particle_latent_dim]
+                # knnk = [self.knn_k // 2]
 
             pos_range = 3
 
@@ -583,7 +583,7 @@ class model_particles:
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
                                 n = autofc(n, fdim[bi], name = 'fc')
-                                n = norm(n, 0.999, is_train, name = 'norm')
+                                # n = norm(n, 0.999, is_train, name = 'norm')
                                 n = self.act(n)
                         n = autofc(n, pos_range, name = 'gen_out')
                         n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
