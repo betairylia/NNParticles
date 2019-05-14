@@ -557,6 +557,8 @@ class model_particles:
             regularizer = 0.0
 
             self.decBlocks = blocks
+            if begin_block > 0:
+                coarse_cnt = pcnt[begin_block - 1]
 
             for _bi in range(blocks - begin_block):
                 bi = begin_block + _bi
