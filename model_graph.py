@@ -1,5 +1,4 @@
 import tensorflow as tf
-import tensorlayer as tl
 import numpy as np
 import scipy
 import time
@@ -10,8 +9,6 @@ import sys
 import os
 import matplotlib.pyplot as plt
 
-from tensorlayer.prepro import *
-from tensorlayer.layers import *
 from termcolor import colored, cprint
 
 # from Kuhn_Munkres import KM
@@ -1734,8 +1731,9 @@ class model_particles:
             hqpool_loss *= 0.5
 
         particle_net_vars =\
-            tl.layers.get_variables_with_name('ParticleEncoder', True, True) +\
-            tl.layers.get_variables_with_name('ParticleDecoder', True, True) 
+            []
+            # tl.layers.get_variables_with_name('ParticleEncoder', True, True) +\
+            # tl.layers.get_variables_with_name('ParticleDecoder', True, True) 
         
         # rec_L  = rec_L  * self.normalize
         # rec_LX = rec_LX * self.normalize
@@ -1743,7 +1741,7 @@ class model_particles:
         # rec_YX = rec_YX * self.normalize
         # rec_Y  = rec_Y  * self.normalize
 
-        return reconstruct_loss, simulation_loss, hqpool_loss, pool_align_loss, particle_net_vars, raw_error
+        return rec_X, normalized_X[:, :, 0:outDim], reconstruct_loss, simulation_loss, hqpool_loss, pool_align_loss, particle_net_vars, raw_error
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
@@ -1790,10 +1788,11 @@ class model_particles:
     def build_model(self):
 
         # Train & Validation
-        self.train_particleRecLoss, self.train_particleSimLoss, self.train_HQPLoss, self.train_PALoss,\
+        _, _, self.train_particleRecLoss, self.train_particleSimLoss, self.train_HQPLoss, self.train_PALoss,\
         self.particle_vars, self.train_error =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
+        self.val_rec, self.val_gt,\
         self.val_particleRecLoss, self.val_particleSimLoss, _, _, _, self.val_error =\
             self.build_network(False, True, self.doLoop, self.doSim)
 

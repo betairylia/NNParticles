@@ -1,7 +1,6 @@
 # python train_particleTest.py -gpu 2 -ep 20 -bs 128 -vSize 22 -vm 10 -zdim 30 -hdim 64 -enc plain -dec plain -log log_particleTest -name Plain_Plain_bs128_z30h64_gs8_gm22 MDSets/2560_smallGrid/
 
 import tensorflow as tf
-import tensorlayer as tl
 import numpy as np
 import scipy
 import time
@@ -13,8 +12,12 @@ import os
 
 from termcolor import colored, cprint
 
-import model_graph as model
-from model_graph import model_particles as model_net
+import model_graph_ref as model
+from model_graph_ref import model_particles as model_net
+
+# import model_graph as model
+# from model_graph import model_particles as model_net
+
 # import dataLoad_particleTest as dataLoad                        # Legacy method, strongly disagree with i.i.d. distribution among batch(epoch)es.
 import dataLoad_graph as dataLoad            # New method, shuffle & mixed randomly
 
@@ -126,8 +129,13 @@ vals = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections 
 ptrapfs = tf.summary.scalar('Particle HQPool Loss', model.train_HQPLoss)
 ptrapps = tf.summary.scalar('Particle Pool Align Loss', model.train_PALoss)
 
+from tensorboard.plugins.mesh import summary as mesh_summary
+pc_rec = mesh_summary.op('Reconstruction', vertices = tf.expand_dims(model.val_rec[0, :, :], 0), colors = tf.constant([[[109, 131, 70]]], shape = [1, args.voxel_size, 3]))
+pc_gt = mesh_summary.op('Ground truth', vertices = tf.expand_dims(model.val_gt[0, :, :], 0), colors = tf.constant([[[0, 154, 214]]], shape = [1, args.voxel_size, 3]))
+
 merged_train = tf.summary.merge([ptraps, ptraprs, ptrapss, ptrapfs, ptrapps])
 merged_val = tf.summary.merge([vals])
+merged_mesh = tf.summary.merge([pc_rec, pc_gt])
 # merged_train = tf.summary.merge_all()
 
 # Create session
@@ -157,7 +165,8 @@ train_writer = tf.summary.FileWriter(logPath + '/train', sess.graph)
 val_writer = tf.summary.FileWriter(logPath + '/validation', sess.graph)
 
 sess.run(tf.local_variables_initializer())
-tl.layers.initialize_global_variables(sess)
+# tl.layers.initialize_global_variables(sess)
+sess.run(tf.global_variables_initializer())
 
 save_path = "savedModels/" + args.name + "/"
 if not os.path.exists(save_path):
@@ -247,8 +256,14 @@ while True:
         _vx, _vx_size = next(batch_validate, [None, None])
         
         feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
-        n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
-        val_writer.add_summary(summary, batch_idx_test)
+        
+        if batch_idx_test % 100 == 0:
+            n_loss, summary, summary_mesh = sess.run([model.val_particleLoss, merged_val, merged_mesh], feed_dict = feed_dict)
+            val_writer.add_summary(summary, batch_idx_test)
+            val_writer.add_summary(summary_mesh, batch_idx_test // 100)
+        else:
+            n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
+            val_writer.add_summary(summary, batch_idx_test)
         batch_idx_test += 1
 
         print(colored("(val = %7.4f)" % n_loss, 'blue'))
