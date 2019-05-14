@@ -532,7 +532,7 @@ class model_particles:
                 maxLen = [None, 0.5]
                 nConv = [2, 0]
                 nRes = [4, 0]
-                hdim = [self.particle_hidden_dim, self.particle_hidden_dim // 3]
+                hdim = [max(self.particle_latent_dim, hd * 2), self.particle_hidden_dim // 3]
                 fdim = [512, self.particle_latent_dim] # dim of features used for folding
                 gen_hdim = [512, self.particle_latent_dim]
                 knnk = [self.knn_k, self.knn_k // 2]
