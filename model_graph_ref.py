@@ -447,8 +447,8 @@ class model_particles:
 
                     gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen')
 
-                    n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv' % i, w_init, b_init)
-                    n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res' % i, w_init, b_init)
+                    n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init)
+                    n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init)
 
             if early_stop == 0:
                 n = autofc(n, target_dim, name = 'enc%d/convOut' % (blocks - 1))
