@@ -380,7 +380,7 @@ class model_particles:
             # We are going to use a way deeper model than before. Please refer to model_particlesTest_backup.py for original codes.
             
             # ShapeNet_regular_featureSqz
-            blocks = 5
+            blocks = 3
             particles_count = [self.gridMaxSize, 1920, 768, max(256, self.cluster_count * 2), self.cluster_count]
             conv_count = [1, 2, 2, 0, 0]
             res_count = [0, 0, 0, 1, 2]
@@ -525,17 +525,17 @@ class model_particles:
                 gen_hdim = [512, self.particle_latent_dim]
                 knnk = [self.knn_k, self.knn_k // 2]
                 
-                # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
-                # blocks = 1
-                # pcnt = [self.gridMaxSize] # particle count
-                # generator = [ 6] # Generator depth
-                # maxLen = [None]
-                # nConv = [0]
-                # nRes = [0]
-                # hdim = [self.particle_hidden_dim // 3]
-                # fdim = [self.particle_latent_dim] # dim of features used for folding
-                # gen_hdim = [self.particle_latent_dim]
-                # knnk = [self.knn_k // 2]
+                coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
+                blocks = 1
+                pcnt = [self.gridMaxSize] # particle count
+                generator = [6] # Generator depth
+                maxLen = [None]
+                nConv = [0]
+                nRes = [0]
+                hdim = [self.particle_hidden_dim // 3]
+                fdim = [self.particle_latent_dim] # dim of features used for folding
+                gen_hdim = [self.particle_latent_dim]
+                knnk = [self.knn_k // 2]
 
             pos_range = 3
 
