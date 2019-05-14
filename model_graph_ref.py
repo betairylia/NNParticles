@@ -735,14 +735,14 @@ class model_particles:
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
 
             # Go through the particle AE
+            posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, early_stop = self.stages[i][0], is_train = is_train, reuse = reuse)
+            outDim = self.outDim
+            _, [rec_X, rec_X_ref, fold_X], _, r = self.particleDecoder(posX, feaX, self.ph_card, outDim, begin_block = self.stages[i][1], is_train = is_train, reuse = reuse)
+
             es = 0
             ee = 0
             ds = self.decBlocks
             de = self.decBlocks
-
-            posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, early_stop = self.stages[i][0], is_train = is_train, reuse = reuse)
-            outDim = self.outDim
-            _, [rec_X, rec_X_ref, fold_X], _, r = self.particleDecoder(posX, feaX, self.ph_card, outDim, begin_block = self.stages[i][1], is_train = is_train, reuse = reuse)
 
             if is_train == True:
                 for i in range(len(self.stages)):
