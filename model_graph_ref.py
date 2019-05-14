@@ -756,6 +756,7 @@ class model_particles:
                     pos.append(posX)
                     fea.append(feaX)
                     rec.append(rec_X)
+                    vs = []
                     
                     # Variable for encoders
                     if self.stages[i][0] == 0:
@@ -763,14 +764,16 @@ class model_particles:
                     else:
                         ee = self.stages[i][0]
                     for eb in range(es, ee):
-                        vls.append(tf.trainable_variables(scope = 'enc%d' % eb))
+                        vs += tf.trainable_variables(scope = 'enc%d' % eb)
                     es = ee
 
                     # Variable for decoders
                     ds = self.stages[i][1]
                     for db in range(ds, de):
-                        vls.append(tf.trainable_variables(scope = 'dec%d' % db))
+                        vs += tf.trainable_variables(scope = 'dec%d' % db)
                     de = ds
+
+                    vls.append(vs)
 
                     recLoss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
                     loss.append(recLoss)
