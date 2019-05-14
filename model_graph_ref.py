@@ -839,7 +839,9 @@ class model_particles:
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             for i in range(self.stages):
-                gvs = self.optimizer.compute_gradients(self.train_particleLosses[i])
+                print("Stage %d vars:" % i)
+                print(self.particle_vars[i])
+                gvs = self.optimizer.compute_gradients(self.train_particleLosses[i], var_list = self.particle_vars[i])
                 capped_gvs = [(tf.clip_by_value(grad, -1., 1.) if grad is not None else None, var) for grad, var in gvs]
                 # self.train_op = self.optimizer.minimize(self.train_particleLoss)
                 train_op = self.optimizer.apply_gradients(capped_gvs)
