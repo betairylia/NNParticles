@@ -157,7 +157,7 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, is_tra
             # fCh = 12
 
         ### Do the convolution ###
-        mlp = [channels]
+        mlp = [channels, channels]
         n = kNNEdg
         for i in range(len(mlp)):
             n = autofc(n, mlp[i], tf.nn.elu, name = 'kernel/mlp%d' % i)
@@ -354,7 +354,8 @@ class model_particles:
 
         self.wdev=0.1
 
-        self.stages = [[5, 1], [0, 0]]
+        # self.stages = [[5, 1], [0, 0]] # 2 stages
+        self.stages = [[2, 2], [5, 1], [0, 0]] # 3 stages
 
         # self.initial_grid_size = 6.0 # TODO: make this larger? (Done in dataLoad)
         # self.total_world_size = 96.0
@@ -391,6 +392,7 @@ class model_particles:
             hd = self.particle_hidden_dim
             channels = [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(self.particle_latent_dim, hd * 2)]
             
+            particles_count = [self.gridMaxSize, 1280, 512, max(256, self.cluster_count * 2), self.cluster_count]
             res_count[4] = 6
 
             # ShapeNet_SingleVector
@@ -450,7 +452,7 @@ class model_particles:
                     n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init)
                     n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init)
 
-            if early_stop == 0:
+            if self.useVector == False and early_stop == 0:
                 n = autofc(n, target_dim, name = 'enc%d/convOut' % (blocks - 1))
             
             if self.useVector == True and early_stop == 0:
@@ -459,6 +461,13 @@ class model_particles:
                     _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
                     n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init)
                     n = autofc(n, 512, name = 'globalPool/fc')
+                    n = autofc(n, 512, name = 'globalPool/fc2')
+                    
+                    # n = tf.reduce_max(n, axis = 1, keepdims = True)
+                    # n = autofc(n, 512, name = 'fc1')
+                    # n = autofc(n, 512, name = 'fc2')
+                    # n = autofc(n, 512, name = 'fc3')
+
                     gPos = zeroPos
 
             if returnPool == True:
@@ -528,15 +537,30 @@ class model_particles:
                 coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
                 blocks = 2
                 pcnt = [self.cluster_count, self.gridMaxSize] # particle count
-                generator = [6, 6] # Generator depth
-                maxLen = [None, 0.5]
+                # generator = [6, 6]
+                generator = [4, 4] # Generator depth
+                maxLen = [None, 1.5]
                 nConv = [2, 0]
-                nRes = [4, 0]
+                nRes = [2, 0]
                 hdim = [max(self.particle_latent_dim, hd * 2), self.particle_hidden_dim // 3]
                 fdim = [512, self.particle_latent_dim] # dim of features used for folding
                 gen_hdim = [512, self.particle_latent_dim]
                 knnk = [self.knn_k, self.knn_k // 2]
                 
+                # 3 stages
+                coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
+                blocks = 3
+                pcnt = [self.cluster_count, 1280, self.gridMaxSize] # particle count
+                # generator = [6, 6]
+                generator = [4, 4, 4] # Generator depth
+                maxLen = [None, 1.5, 0.3]
+                nConv = [2, 2, 0]
+                nRes = [4, 1, 0]
+                hdim = [max(self.particle_latent_dim, hd * 2), 2 * self.particle_hidden_dim // 3, self.particle_hidden_dim // 3]
+                fdim = [512, self.particle_latent_dim, self.particle_latent_dim // 2] # dim of features used for folding
+                gen_hdim = [512, self.particle_latent_dim, self.particle_latent_dim // 2]
+                knnk = [self.knn_k, self.knn_k, self.knn_k // 2] 
+
                 # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
                 # blocks = 1
                 # pcnt = [self.gridMaxSize] # particle count
@@ -764,13 +788,13 @@ class model_particles:
                     else:
                         ee = self.stages[i][0]
                     for eb in range(es, ee):
-                        vs += tf.trainable_variables(scope = 'enc%d' % eb)
+                        vs += tf.trainable_variables(scope = 'net/ParticleEncoder/enc%d' % eb)
                     es = ee
 
                     # Variable for decoders
                     ds = self.stages[i][1]
                     for db in range(ds, de):
-                        vs += tf.trainable_variables(scope = 'dec%d' % db)
+                        vs += tf.trainable_variables(scope = 'net/ParticleDecoder/dec%d' % db)
                     de = ds
 
                     vls.append(vs)
