@@ -435,8 +435,9 @@ class model_particles:
                         # Pooling
                         prev_n = n
                         prev_pos = gPos
+                        print("Pooling...")
                         gPos, n = kNNGPooling_farthest(n, gPos, particles_count[i])
-                        
+                        print("pooling finished")
                         # Single point
                         # if i == 4:
                         #     gPos = tf.zeros_like(gPos)
