@@ -10,6 +10,7 @@ import os
 import matplotlib.pyplot as plt
 
 from termcolor import colored, cprint
+from config_graph_ref import config
 
 # from Kuhn_Munkres import KM
 # from BN16 import BatchNormalizationF16
@@ -157,7 +158,7 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
             # fCh = 12
 
         ### Do the convolution ###
-        mlp = [channels, channels]
+        mlp = mlp
         n = kNNEdg
         for i in range(len(mlp)):
             n = autofc(n, mlp[i], tf.nn.elu, name = 'kernel/mlp%d' % i)
@@ -266,7 +267,7 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
             fCh = 4
 
         if mlp == None:
-            mlp = [filters]
+            mlp = [filters * 2]
         
         n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv')
         if use_norm:
