@@ -386,13 +386,13 @@ class model_particles:
             # We are going to use a way deeper model than before. Please refer to model_particlesTest_backup.py for original codes.
             
             # ShapeNet_regular_featureSqz
-            blocks = config.encoder['blocks']
-            particles_count = config.encoder['particles_count']
-            conv_count = config.encoder['conv_count']
-            res_count = config.encoder['res_count']
-            kernel_size = config.encoder['kernel_size']
-            bik = config.encoder['bik']
-            channels = config.encoder['channels']
+            blocks = config['encoder']['blocks']
+            particles_count = config['encoder']['particles_count']
+            conv_count = config['encoder']['conv_count']
+            res_count = config['encoder']['res_count']
+            kernel_size = config['encoder']['kernel_size']
+            bik = config['encoder']['bik']
+            channels = config['encoder']['channels']
 
             self.pool_count = blocks - 1
             self.pCount = particles_count
@@ -492,16 +492,16 @@ class model_particles:
             if self.useVector == True:
                 coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
 
-            blocks = config.decoder['blocks']
-            pcnt = config.decoder['pcnt']
-            generator = config.decoder['generator']
-            maxLen = config.decoder['maxLen']
-            nConv = config.decoder['nConv']
-            nRes = config.decoder['nRes']
-            hdim = config.decoder['hdim']
-            fdim = config.decoder['fdim']
-            gen_hdim = config.decoder['gen_hdim']
-            knnk = config.decoder['knnk']
+            blocks = config['decoder']['blocks']
+            pcnt = config['decoder']['pcnt']
+            generator = config['decoder']['generator']
+            maxLen = config['decoder']['maxLen']
+            nConv = config['decoder']['nConv']
+            nRes = config['decoder']['nRes']
+            hdim = config['decoder']['hdim']
+            fdim = config['decoder']['fdim']
+            gen_hdim = config['decoder']['gen_hdim']
+            knnk = config['decoder']['knnk']
 
             pos_range = 3
 
