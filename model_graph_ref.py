@@ -139,7 +139,7 @@ def kNNG_gen(inputs, k, pos_range, name = 'kNNG_gen'):
     p, _, idx, edg = bip_kNNG_gen(inputs, inputs, k, pos_range, name)
     return p, idx, edg
 
-def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, is_train, W_init, b_init, name):
+def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name):
     
     with tf.variable_scope(name):
 
@@ -257,15 +257,18 @@ def kNNGPosition_refine(input_position, input_feature, refine_maxLength, act, hi
 
         return refined_pos
 
-def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, name = 'gconv', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0)):
+def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, name = 'gconv', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None):
     
     with tf.variable_scope(name):
         
         fCh = 6
         if filters >= 256: 
             fCh = 4
+
+        if mlp == None:
+            mlp = [filters]
         
-        n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, is_train, W_init, b_init, 'gconv')
+        n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv')
         if use_norm:
             n = norm(n, 0.999, is_train, name = 'norm')
         if act:
@@ -273,7 +276,7 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
     
     return n
 
-def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0)):
+def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None):
 
     with tf.variable_scope(name):
         
@@ -283,7 +286,7 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
             nn = n
             with tf.variable_scope('res%d' % r):
                 for c in range(num_conv):
-                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init)
+                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp)
             n = n + nn
         
         if num_res > 1:
@@ -581,6 +584,9 @@ class model_particles:
 
             regularizer = 0.0
 
+            # Meta-data
+            # int_meta = tf.reshape(tf.range(coarse_cnt), [self.batch_size, coarse_cnt, 1])
+
             self.decBlocks = blocks
             if begin_block > 0:
                 coarse_cnt = pcnt[begin_block - 1]
@@ -597,51 +603,34 @@ class model_particles:
 
                     n_per_cluster = pcnt[bi] // coarse_cnt
 
-                    if False: # fc
-                        n = coarse_fea
-                        for gi in range(generator[bi]):
-                            with tf.variable_scope('gen%d' % gi):
-                                n = autofc(n, fdim[bi], name = 'fc')
-                                n = norm(n, 0.999, is_train, name = 'norm')
-                                n = self.act(n)
-                        n = autofc(n, pos_range * n_per_cluster, 'gen_out')
-                        n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+                    # generator
+                    # int_meta = tf.broadcast_to(tf.reshape(int_meta, [self.batch_size, coarse_cnt, 1, -1]), [self.batch_size, coarse_cnt, n_per_cluster, 1])
+                    z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                    fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
+                    z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
+                    
+                    n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
+                    
+                    for gi in range(generator[bi]):
+                        with tf.variable_scope('gen%d' % gi):
+                            n = autofc(n, fdim[bi], name = 'fc')
+                            # n = norm(n, 0.999, is_train, name = 'norm')
+                            n = self.act(n)
+                    n = autofc(n, pos_range, name = 'gen_out')
+                    n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
 
-                        if maxLen[bi] is not None:
-                            n = norm_tun(n, maxLen[bi])
+                    n_ref = n
+                    if maxLen[bi] is not None:
+                        # n = norm_tun(n, maxLen[bi])
+                        # n = maxLen[bi] * n
+                        n_ref = norm_tun(n_ref, maxLen[bi])
 
-                        # Back to world space
-                        n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
-                        
-                        ap = tf.reshape(n, [self.batch_size, pcnt[bi], pos_range])
-
-                    else: # generator
-                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
-                        fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
-                        z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
-                        
-                        n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
-                        
-                        for gi in range(generator[bi]):
-                            with tf.variable_scope('gen%d' % gi):
-                                n = autofc(n, fdim[bi], name = 'fc')
-                                # n = norm(n, 0.999, is_train, name = 'norm')
-                                n = self.act(n)
-                        n = autofc(n, pos_range, name = 'gen_out')
-                        n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
-
-                        n_ref = n
-                        if maxLen[bi] is not None:
-                            # n = norm_tun(n, maxLen[bi])
-                            # n = maxLen[bi] * n
-                            n_ref = norm_tun(n_ref, maxLen[bi])
-
-                        # Back to world space
-                        n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
-                        n_ref = n_ref + tf.reshape(coarse_pos_ref, [self.batch_size, coarse_cnt, 1, pos_range])
-                        
-                        ap = tf.reshape(n, [self.batch_size, pcnt[bi], pos_range])
-                        ap_ref = tf.reshape(n_ref, [self.batch_size, pcnt[bi], pos_range])
+                    # Back to world space
+                    n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
+                    n_ref = n_ref + tf.reshape(coarse_pos_ref, [self.batch_size, coarse_cnt, 1, pos_range])
+                    
+                    ap = tf.reshape(n, [self.batch_size, pcnt[bi], pos_range])
+                    ap_ref = tf.reshape(n_ref, [self.batch_size, pcnt[bi], pos_range])
 
                     # General operations for full generators
                     gen_only.append(ap)

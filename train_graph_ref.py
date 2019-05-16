@@ -61,6 +61,7 @@ parser.add_argument('-nsim', '--no-sim', dest = 'dosim', action='store_const', d
 
 parser.add_argument('-log', '--log', type = str, default = "logs", help = "Path to log dir")
 parser.add_argument('-name', '--name', type = str, default = "NoName", help = "Name to show on tensor board")
+parser.add_argument('-preview', '--previewName', type = str, default = "unnamed", help = "Name for save preview point clouds")
 parser.add_argument('-save', '--save', type = str, default = "model", help = "Path to store trained model")
 parser.add_argument('-load', '--load', type = str, default = "None", help = "File to load to continue training")
 parser.add_argument('-debug', '--debug', dest = "enable_debug", action = 'store_const', default = False, const = True, help = "Enable debugging")
@@ -68,6 +69,16 @@ parser.add_argument('-prof', '--profile', dest = "profile", action = 'store_cons
 # parser.add_argument('-prof', '--profile', type = str, default = "None", help = "Path to store profiling timeline (at step 100)")
 
 args = parser.parse_args()
+
+def write_models(array, dirc, name):
+    if not os.path.exists(dirc):
+        os.makedirs(dirc)
+    
+    with open(os.path.join(dirc, name), 'w') as model_file:
+        for pi in range(array.shape[0]):
+            for ci in range(array.shape[1]):
+                model_file.write('%f ', array[pi, ci])
+            model_file.write('\n')
 
 dataLoad.maxParticlesPerGrid = args.voxel_size
 if args.voxel_length == 0:
@@ -78,6 +89,9 @@ else:
 
 if args.name == "NoName":
     args.name = "[NPY][NoCard][1st2ndmomentEdges(edgeMask,[u;v;edg])][NoPosInVertFeature] E(%s)-D(%s)-%d^3(%d)g%dh%dz-bs%dlr%f-%s" % ("graph", "graph", args.voxel_length, args.voxel_size, args.hidden_dim, args.latent_dim, args.batch_size, args.learning_rate, 'Adam' if args.adam else 'mSGD')
+
+if args.previewName == 'unnamed':
+    args.previewName = args.name
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 
@@ -125,13 +139,13 @@ model.build_model()
 ptraps = [tf.summary.scalar('Stage %d - Particle Loss' % i, model.train_particleLosses[i]) for i in range(model.stages)]
 vals = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections = None)
 
-from tensorboard.plugins.mesh import summary as mesh_summary
-pc_rec = mesh_summary.op('Reconstruction', vertices = tf.expand_dims(model.val_rec[0, :, :], 0), colors = tf.constant([[[109, 131, 70]]], shape = [1, args.voxel_size, 3]))
-pc_gt = mesh_summary.op('Ground truth', vertices = tf.expand_dims(model.val_gt[0, :, :], 0), colors = tf.constant([[[0, 154, 214]]], shape = [1, args.voxel_size, 3]))
+# from tensorboard.plugins.mesh import summary as mesh_summary
+# pc_rec = mesh_summary.op('Reconstruction', vertices = tf.expand_dims(model.val_rec[0, :, :], 0), colors = tf.constant([[[109, 131, 70]]], shape = [1, args.voxel_size, 3]))
+# pc_gt = mesh_summary.op('Ground truth', vertices = tf.expand_dims(model.val_gt[0, :, :], 0), colors = tf.constant([[[0, 154, 214]]], shape = [1, args.voxel_size, 3]))
 
 merged_train = [tf.summary.merge([ptraps[i]]) for i in range(model.stages)]
 merged_val = tf.summary.merge([vals])
-merged_mesh = tf.summary.merge([pc_rec, pc_gt])
+# merged_mesh = tf.summary.merge([pc_rec, pc_gt])
 # merged_train = tf.summary.merge_all()
 
 # Create session
@@ -233,10 +247,12 @@ while True:
         
         feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
         
-        if batch_idx_test % 100 == 0:
-            n_loss, summary, summary_mesh = sess.run([model.val_particleLoss, merged_val, merged_mesh], feed_dict = feed_dict)
+        if batch_idx_test % 500 == 0:
+            n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
             val_writer.add_summary(summary, batch_idx_test)
-            val_writer.add_summary(summary_mesh, batch_idx_test // 100)
+            write_models(_rec, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
+            write_models(_gt, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
+            # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
         else:
             n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
             val_writer.add_summary(summary, batch_idx_test)
