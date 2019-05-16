@@ -358,7 +358,7 @@ class model_particles:
 
         self.wdev=0.1
 
-        self.stages = config.stages # 2 stages
+        self.stages = config['stages'] # 2 stages
 
         # self.initial_grid_size = 6.0 # TODO: make this larger? (Done in dataLoad)
         # self.total_world_size = 96.0
