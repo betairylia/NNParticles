@@ -464,7 +464,7 @@ class model_particles:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
                     _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
-                    n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init)
+                    n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
                     n = autofc(n, 512, name = 'globalPool/fc')
                     n = autofc(n, 512, name = 'globalPool/fc2')
                     
@@ -542,8 +542,8 @@ class model_particles:
                 coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
                 blocks = 2
                 pcnt = [self.cluster_count, self.gridMaxSize] # particle count
-                # generator = [6, 6]
-                generator = [4, 4] # Generator depth
+                generator = [6, 6]
+                # generator = [4, 4] # Generator depth
                 maxLen = [None, 1.5]
                 nConv = [2, 0]
                 nRes = [2, 0]
@@ -553,18 +553,18 @@ class model_particles:
                 knnk = [self.knn_k, self.knn_k // 2]
                 
                 # 3 stages
-                coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
-                blocks = 3
-                pcnt = [self.cluster_count, 1280, self.gridMaxSize] # particle count
+                # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
+                # blocks = 3
+                # pcnt = [self.cluster_count, 1280, self.gridMaxSize] # particle count
                 # generator = [6, 6]
-                generator = [4, 4, 4] # Generator depth
-                maxLen = [None, 1.5, 0.3]
-                nConv = [2, 2, 0]
-                nRes = [4, 1, 0]
-                hdim = [max(self.particle_latent_dim, hd * 2), 2 * self.particle_hidden_dim // 3, self.particle_hidden_dim // 3]
-                fdim = [512, self.particle_latent_dim, self.particle_latent_dim // 2] # dim of features used for folding
-                gen_hdim = [512, self.particle_latent_dim, self.particle_latent_dim // 2]
-                knnk = [self.knn_k, self.knn_k, self.knn_k // 2] 
+                # generator = [4, 4, 4] # Generator depth
+                # maxLen = [None, 1.5, 0.3]
+                # nConv = [2, 2, 0]
+                # nRes = [4, 1, 0]
+                # hdim = [max(self.particle_latent_dim, hd * 2), 2 * self.particle_hidden_dim // 3, self.particle_hidden_dim // 3]
+                # fdim = [512, self.particle_latent_dim, self.particle_latent_dim // 2] # dim of features used for folding
+                # gen_hdim = [512, self.particle_latent_dim, self.particle_latent_dim // 2]
+                # knnk = [self.knn_k, self.knn_k, self.knn_k // 2] 
 
                 # coarse_pos, coarse_fea, coarse_cnt = cluster_pos, local_feature, 1
                 # blocks = 1
