@@ -70,16 +70,16 @@ config_dict = {
             'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
         },
         'decoder': {
-            'blocks' = 1,
-            'pcnt' = [vSize], # particle count
-            'generator' = [6], # Generator depth
-            'maxLen' = [1.5],
-            'nConv' = [0],
-            'nRes' = [0],
-            'hdim' = [hd // 3],
-            'fdim' = [ld], # dim of features used for folding
-            'gen_hdim' = [ld],
-            'knnk' = [k // 2],
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [1.5],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
         },
         'stages': [0, 0]
     },
@@ -95,16 +95,16 @@ config_dict = {
             'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
         },
         'decoder': {
-            'blocks' = 2,
-            'pcnt' = [ccnt, vSize], # particle count
-            'generator' = [3, 6], # Generator depth
-            'maxLen' = [None, 1.5],
-            'nConv' = [2, 0],
-            'nRes' = [3, 0],
-            'hdim' = [max(ld, hd * 2), hd // 3],
-            'fdim' = [512, ld], # dim of features used for folding
-            'gen_hdim' = [512, ld],
-            'knnk' = [k, k // 2],
+            'blocks' : 2,
+            'pcnt' : [ccnt, vSize], # particle count
+            'generator' : [3, 6], # Generator depth
+            'maxLen' : [None, 1.5],
+            'nConv' : [2, 0],
+            'nRes' : [3, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k // 2],
         },
         'stages': [[5, 1], [0, 0]]
     },
@@ -120,16 +120,16 @@ config_dict = {
             'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
         },
         'decoder': {
-            'blocks' = 1,
-            'pcnt' = [vSize], # particle count
-            'generator' = [6], # Generator depth
-            'maxLen' = [1.5],
-            'nConv' = [0],
-            'nRes' = [0],
-            'hdim' = [hd // 3],
-            'fdim' = [ld], # dim of features used for folding
-            'gen_hdim' = [ld],
-            'knnk' = [k // 2],
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [1.5],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
         },
         'stages': [0, 0]
     },
