@@ -450,7 +450,7 @@ class model_particles:
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
                     _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
                     n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
-                    n = autofc(n, 512, name = 'globalPool/fc')
+                    n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     n = autofc(n, 512, name = 'globalPool/fc2')
                     
                     # n = tf.reduce_max(n, axis = 1, keepdims = True)
@@ -502,6 +502,7 @@ class model_particles:
             fdim = config['decoder']['fdim']
             gen_hdim = config['decoder']['gen_hdim']
             knnk = config['decoder']['knnk']
+            generator_struct = config['decoder']['genStruct']
 
             pos_range = 3
 
@@ -529,21 +530,63 @@ class model_particles:
 
                     n_per_cluster = pcnt[bi] // coarse_cnt
 
-                    # generator
-                    # int_meta = tf.broadcast_to(tf.reshape(int_meta, [self.batch_size, coarse_cnt, 1, -1]), [self.batch_size, coarse_cnt, n_per_cluster, 1])
-                    z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
-                    fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
-                    z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
+                    if generator_struct == 'concat':
+                        # generator
+                        # int_meta = tf.broadcast_to(tf.reshape(int_meta, [self.batch_size, coarse_cnt, 1, -1]), [self.batch_size, coarse_cnt, n_per_cluster, 1])
+                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
+                        z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
+                        
+                        n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
+                        
+                        for gi in range(generator[bi]):
+                            with tf.variable_scope('gen%d' % gi):
+                                n = autofc(n, gen_hdim[bi], name = 'fc')
+                                # n = norm(n, 0.999, is_train, name = 'norm')
+                                n = self.act(n)
+                        n = autofc(n, pos_range, name = 'gen_out')
+                        n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
                     
-                    n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
-                    
-                    for gi in range(generator[bi]):
-                        with tf.variable_scope('gen%d' % gi):
-                            n = autofc(n, fdim[bi], name = 'fc')
-                            # n = norm(n, 0.999, is_train, name = 'norm')
-                            n = self.act(n)
-                    n = autofc(n, pos_range, name = 'gen_out')
-                    n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+                    elif generator_struct == 'final_selection':
+                        
+                        # weight, bias, transformation generator
+                        with tf.variable_scope('weight_gen'):
+                            l = autofc(coarse_fea, gen_hdim[bi], name = 'mlp1')
+                            l = norm(l, 0.999, is_train, name = 'mlp1/norm')
+                            l = self.act(l)
+                            l = autofc(coarse_fea, gen_hdim[bi], name = 'mlp2')
+                            l = norm(l, 0.999, is_train, name = 'mlp2/norm')
+                            l = self.act(l)
+
+                            w = autofc(l, pos_range * fdim[bi] , name = 'mlp/w')
+                            b = autofc(l, pos_range            , name = 'mlp/b')
+                            t = autofc(l, pos_range * pos_range, name = 'mlp/t')
+
+                            w = tf.reshape(w, [self.batch_size, coarse_cnt, n_per_cluster,  fdim[bi], pos_range])
+                            w = tf.nn.softmax(w, axis = 3)
+                            t = tf.reshape(t, [self.batch_size, coarse_cnt, n_per_cluster, pos_range, pos_range])
+                            b = tf.reshape(t, [self.batch_size, coarse_cnt,             1, pos_range])
+
+                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+
+                        # Regular generator
+                        for gi in range(generator[bi]):
+                            with tf.variable_scope('gen%d' % gi):
+                                z = autofc(z, gen_hdim[bi], name = 'fc')
+                                # z = norm(z, 0.999, is_train, name = 'norm')
+                                z = self.act(z)
+                        z = autofc(z, fdim[bi], name = 'fc_final')
+                        
+                        # Collect features
+                        z = tf.multiply(w, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi], 1]))
+                        z = tf.reduce_sum(z, axis = 3) # z <- [bs, coarse_cnt, n_per_cluster, pos_range]
+                        z = z + b
+
+                        # Linear transformation
+                        z = tf.multiply(t, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, pos_range, 1]))
+                        z = tf.reduce_sum(z, axis = 3)
+
+                        n = z
 
                     n_ref = n
                     if maxLen[bi] is not None:
@@ -719,7 +762,7 @@ class model_particles:
                     loss.append(recLoss)
             else:
                 rec = rec_X
-                loss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                loss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, tf.square, EMD = True) # Keep use L2 for validation loss.
                 vls = []
                 pos = posX
                 fea = feaX

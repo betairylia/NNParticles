@@ -58,6 +58,7 @@ k = 16
 # knnk = [self.knn_k // 2]
 
 config_dict = {
+    # Graph
     'regular': {
         'useVector': False,
         'encoder': {
@@ -80,9 +81,90 @@ config_dict = {
             'fdim' : [ld], # dim of features used for folding
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
+            'genStruct' : 'concat',
         },
         'stages': [0, 0]
     },
+    'regular_fS': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [vSize, 1280, 512, max(256, ccnt * 2), ccnt],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 1, 6],
+            'kernel_size' : [k - 8, k - 4, k, k, k],
+            'bik' : [0, 32, 32, 48, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [1.5],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'final_selection',
+        },
+        'stages': [0, 0]
+    },
+    'shallow': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [vSize, 512, ccnt],
+            'conv_count' : [1, 2, 0],
+            'res_count' : [0, 0, 3],
+            'kernel_size' : [k - 8, k, k],
+            'bik' : [0, 32, 32],
+            'channels' : [hd // 2, hd, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [1.5],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'concat',
+        },
+        'stages': [0, 0]
+    },
+    'shallow_fS': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [vSize, 512, ccnt],
+            'conv_count' : [1, 2, 0],
+            'res_count' : [0, 0, 3],
+            'kernel_size' : [k - 8, k, k],
+            'bik' : [0, 32, 32],
+            'channels' : [hd // 2, hd, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [1.5],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'final_selection',
+        },
+        'stages': [0, 0]
+    },
+
+    # Vector
     'vecRegular': {
         'useVector': True,
         'encoder': {
@@ -105,6 +187,33 @@ config_dict = {
             'fdim' : [512, ld], # dim of features used for folding
             'gen_hdim' : [512, ld],
             'knnk' : [k, k // 2],
+            'genStruct' : 'concat',
+        },
+        'stages': [[5, 1], [0, 0]]
+    },
+    'vecRegular_fS': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [vSize, 1280, 512, max(256, ccnt * 2), ccnt],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 1, 6],
+            'kernel_size' : [k - 8, k - 4, k, k, k],
+            'bik' : [0, 32, 32, 48, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [ccnt, vSize], # particle count
+            'generator' : [3, 6], # Generator depth
+            'maxLen' : [None, 1.5],
+            'nConv' : [2, 0],
+            'nRes' : [3, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k // 2],
+            'genStruct' : 'final_selection',
         },
         'stages': [[5, 1], [0, 0]]
     },
@@ -130,6 +239,7 @@ config_dict = {
             'fdim' : [ld], # dim of features used for folding
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
+            'genStruct' : 'concat',
         },
         'stages': [0, 0]
     },
