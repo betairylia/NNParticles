@@ -28,7 +28,7 @@ def norm(inputs, decay, is_train, name):
     decay = 0.965
 
     # Disable norm
-    return inputs
+    # return inputs
 
     # if default_dtype == tf.float32:
     #     return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
@@ -38,7 +38,8 @@ def norm(inputs, decay, is_train, name):
     # return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
     # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, fused = True)
     
-    # Batch norm
+    # Batch re-norm
+    return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, scope = name, fused = True, renorm = True)
     # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, scope = name, fused = True)
     
     # Layer norm
@@ -164,7 +165,8 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
             n = autofc(n, mlp[i], tf.nn.elu, name = 'kernel/mlp%d' % i)
             # n = norm(n, 0.999, is_train, 'kernel/norm')
         
-        n = autofc(n, channels * fCh, tf.nn.tanh, name = 'kernel/mlp_out')
+        n = autofc(n, channels * fCh, None, name = 'kernel/mlp_out')
+        # n = autofc(n, channels * fCh, tf.nn.tanh, name = 'kernel/mlp_out')
         
         cW = tf.reshape(n, [bs, N, k, channels, fCh])
         
@@ -339,7 +341,7 @@ class model_particles:
         self.resSize = 1
         self.batch_size = batch_size
         self.knn_k = 16
-        self.useVector = True
+        self.useVector = config['useVector']
 
         self.doSim = True
         self.doLoop = True
@@ -451,6 +453,7 @@ class model_particles:
                     _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
                     n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
                     n = autofc(n, 512, self.act, name = 'globalPool/fc')
+                    # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
                     n = autofc(n, 512, name = 'globalPool/fc2')
                     
                     # n = tf.reduce_max(n, axis = 1, keepdims = True)
@@ -552,31 +555,27 @@ class model_particles:
                         # weight, bias, transformation generator
                         with tf.variable_scope('weight_gen'):
                             l = autofc(coarse_fea, gen_hdim[bi], name = 'mlp1')
-                            l = norm(l, 0.999, is_train, name = 'mlp1/norm')
+                            # l = norm(l, 0.999, is_train, name = 'mlp1/norm')
                             l = self.act(l)
                             l = autofc(coarse_fea, gen_hdim[bi], name = 'mlp2')
-                            l = norm(l, 0.999, is_train, name = 'mlp2/norm')
+                            # l = norm(l, 0.999, is_train, name = 'mlp2/norm')
                             l = self.act(l)
 
                             w = autofc(l, pos_range * fdim[bi] , name = 'mlp/w')
                             b = autofc(l, pos_range            , name = 'mlp/b')
                             t = autofc(l, pos_range * pos_range, name = 'mlp/t')
 
-                            w = tf.reshape(w, [self.batch_size, coarse_cnt, n_per_cluster,  fdim[bi], pos_range])
+                            w = tf.reshape(w, [self.batch_size, coarse_cnt, 1,  fdim[bi], pos_range])
                             w = tf.nn.softmax(w, axis = 3)
-                            t = tf.reshape(t, [self.batch_size, coarse_cnt, n_per_cluster, pos_range, pos_range])
-                            b = tf.reshape(t, [self.batch_size, coarse_cnt,             1, pos_range])
+                            t = tf.reshape(t, [self.batch_size, coarse_cnt, 1, pos_range, pos_range])
+                            b = tf.reshape(b, [self.batch_size, coarse_cnt, 1, pos_range])
 
                         z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
 
                         # Regular generator
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
-                                z = autofc(z, gen_hdim[bi], name = 'fc')
-                                # z = norm(z, 0.999, is_train, name = 'norm')
-                                z = self.act(z)
-                        z = autofc(z, fdim[bi], name = 'fc_final')
-                        
+                                z
                         # Collect features
                         z = tf.multiply(w, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi], 1]))
                         z = tf.reduce_sum(z, axis = 3) # z <- [bs, coarse_cnt, n_per_cluster, pos_range]

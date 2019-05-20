@@ -83,7 +83,7 @@ config_dict = {
             'knnk' : [k // 2],
             'genStruct' : 'concat',
         },
-        'stages': [0, 0]
+        'stages': [[0, 0]]
     },
     'regular_fS': {
         'useVector': False,
@@ -109,7 +109,7 @@ config_dict = {
             'knnk' : [k // 2],
             'genStruct' : 'final_selection',
         },
-        'stages': [0, 0]
+        'stages': [[0, 0]]
     },
     'shallow': {
         'useVector': False,
@@ -135,7 +135,7 @@ config_dict = {
             'knnk' : [k // 2],
             'genStruct' : 'concat',
         },
-        'stages': [0, 0]
+        'stages': [[0, 0]]
     },
     'shallow_fS': {
         'useVector': False,
@@ -161,7 +161,7 @@ config_dict = {
             'knnk' : [k // 2],
             'genStruct' : 'final_selection',
         },
-        'stages': [0, 0]
+        'stages': [[0, 0]]
     },
 
     # Vector
@@ -241,8 +241,8 @@ config_dict = {
             'knnk' : [k // 2],
             'genStruct' : 'concat',
         },
-        'stages': [0, 0]
+        'stages': [[0, 0]]
     },
 }
 
-config = config_dict['vecRegular']
+config = config_dict['regular']

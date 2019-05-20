@@ -77,7 +77,7 @@ def write_models(array, dirc, name):
     with open(os.path.join(dirc, name), 'w') as model_file:
         for pi in range(array.shape[0]):
             for ci in range(array.shape[1]):
-                model_file.write('%f ', array[pi, ci])
+                model_file.write('%f ' % array[pi, ci])
             model_file.write('\n')
 
 dataLoad.maxParticlesPerGrid = args.voxel_size
@@ -241,7 +241,7 @@ while True:
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ', end = '')
         for i in range(len(n_losses)):
-            print(colored("Stg%d = %8.4f" % (i, n_losses[i]), 'green'), end = ' ')
+            print(colored("Stg%d =%7.4f" % (i, n_losses[i]), 'green'), end = ' ')
 
         _vx, _vx_size = next(batch_validate, [None, None])
         
@@ -258,7 +258,7 @@ while True:
             val_writer.add_summary(summary, batch_idx_test)
         batch_idx_test += 1
 
-        print(colored("(val = %8.4f)" % n_loss, 'blue'))
+        print(colored("(val =%7.4f)" % n_loss, 'blue'))
 
         if batch_idx_train % (16000 // args.batch_size) == 0:
             sav = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
