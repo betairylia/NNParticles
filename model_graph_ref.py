@@ -21,6 +21,7 @@ from external.structural_losses.tf_approxmatch import approx_match, match_cost
 from external.sampling.tf_sampling import farthest_point_sample, prob_sample
 
 default_dtype = tf.float32
+summary_scope = None
 SN = False
 
 def norm(inputs, decay, is_train, name):
@@ -167,6 +168,9 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         
         n = autofc(n, channels * fCh, None, name = 'kernel/mlp_out')
         # n = autofc(n, channels * fCh, tf.nn.tanh, name = 'kernel/mlp_out')
+
+        with tf.variable_scope(summary_scope):
+            tf.summary.histogram('kernel weights', n)
         
         cW = tf.reshape(n, [bs, N, k, channels, fCh])
         
@@ -515,6 +519,7 @@ class model_particles:
             regularizer = 0.0
 
             # Meta-data
+            meta = []
             # int_meta = tf.reshape(tf.range(coarse_cnt), [self.batch_size, coarse_cnt, 1])
 
             self.decBlocks = blocks
@@ -530,6 +535,7 @@ class model_particles:
                 
                     # Check for good setups
                     assert pcnt[bi] % coarse_cnt == 0
+                    meta.append(coarse_cnt)
 
                     n_per_cluster = pcnt[bi] // coarse_cnt
 
@@ -637,7 +643,7 @@ class model_particles:
 
             regularizer = regularizer / blocks
 
-            return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer
+            return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
     def chamfer_metric(self, particles, particles_ref, groundtruth, pos_range, loss_func, EMD = False):
         
@@ -721,7 +727,7 @@ class model_particles:
             # Go through the particle AE
             posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
             outDim = self.outDim
-            _, [rec_X, rec_X_ref, fold_X], _, r = self.particleDecoder(posX, feaX, self.ph_card, outDim, is_train = is_train, reuse = reuse)
+            _, [rec_X, rec_X_ref, fold_X], _, r, meta = self.particleDecoder(posX, feaX, self.ph_card, outDim, is_train = is_train, reuse = reuse)
 
             es = 0
             ee = 0
@@ -733,7 +739,7 @@ class model_particles:
                     
                     posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, early_stop = self.stages[i][0], is_train = is_train, reuse = True)
                     outDim = self.outDim
-                    _, [rec_X, rec_X_ref, fold_X], _, r = self.particleDecoder(posX, feaX, self.ph_card, outDim, begin_block = self.stages[i][1], is_train = is_train, reuse = True)
+                    _, [rec_X, rec_X_ref, fold_X], _, r, _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, begin_block = self.stages[i][1], is_train = is_train, reuse = True)
                     
                     pos.append(posX)
                     fea.append(feaX)
@@ -766,7 +772,7 @@ class model_particles:
                 pos = posX
                 fea = feaX
 
-        return rec, normalized_X[:, :, 0:outDim], loss, vls
+        return rec, normalized_X[:, :, 0:outDim], loss, vls, meta
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
@@ -814,11 +820,11 @@ class model_particles:
 
         # Train & Validation
         _, _,\
-        self.train_particleLosses, self.particle_vars =\
+        self.train_particleLosses, self.particle_vars, _ =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
         self.val_rec, self.val_gt,\
-        self.val_particleLoss, _ =\
+        self.val_particleLoss, _, self.particle_meta =\
             self.build_network(False, True, self.doLoop, self.doSim)
 
         self.train_ops = []

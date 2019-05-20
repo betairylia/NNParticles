@@ -70,7 +70,7 @@ parser.add_argument('-prof', '--profile', dest = "profile", action = 'store_cons
 
 args = parser.parse_args()
 
-def write_models(array, dirc, name):
+def write_models(array, meta, dirc, name):
     if not os.path.exists(dirc):
         os.makedirs(dirc)
     
@@ -78,6 +78,10 @@ def write_models(array, dirc, name):
         for pi in range(array.shape[0]):
             for ci in range(array.shape[1]):
                 model_file.write('%f ' % array[pi, ci])
+            if meta is not None:
+                for mi in range(len(meta)):
+                    pCount = array.shape[0] // meta[mi]
+                    model_file.write('%d ' % (pi // pCount))
             model_file.write('\n')
 
 dataLoad.maxParticlesPerGrid = args.voxel_size
@@ -98,6 +102,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss", gmtime()) + ")/")
 
 model.default_dtype = args.dtype
+model.summary_scope = tf.variable_scope('summaries')
 # model.default_dtype = tf.float32
 
 # Create the model
@@ -144,6 +149,7 @@ vals = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections 
 # pc_gt = mesh_summary.op('Ground truth', vertices = tf.expand_dims(model.val_gt[0, :, :], 0), colors = tf.constant([[[0, 154, 214]]], shape = [1, args.voxel_size, 3]))
 
 merged_train = [tf.summary.merge([ptraps[i]]) for i in range(model.stages)]
+merged_model_val = tf.summary.merge_all(scope = 'summaries')
 merged_val = tf.summary.merge([vals])
 # merged_mesh = tf.summary.merge([pc_rec, pc_gt])
 # merged_train = tf.summary.merge_all()
@@ -247,11 +253,12 @@ while True:
         
         feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
         
-        if batch_idx_test % 500 == 0:
-            n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
+        if batch_idx_test % 200 == 0:
+            n_loss, summary, summary_2, _rec, _gt = sess.run([model.val_particleLoss, merged_val, merged_model_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
             val_writer.add_summary(summary, batch_idx_test)
-            write_models(_rec, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
-            write_models(_gt, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
+            val_writer.add_summary(summary_2, batch_idx_test)
+            write_models(_rec, model.meta, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
+            write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
             # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
         else:
             n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
