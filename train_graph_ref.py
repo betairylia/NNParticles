@@ -28,6 +28,7 @@ import progressbar
 from tensorflow.python import debug as tf_debug
 
 from tensorflow.python.client import timeline
+from tensorflow.contrib.tensorboard.plugins import projector
 
 parser = argparse.ArgumentParser(description="Run the NN for particle simulation")
 
@@ -102,7 +103,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss", gmtime()) + ")/")
 
 model.default_dtype = args.dtype
-model.summary_scope = tf.variable_scope('summaries')
+# with tf.variable_scope('summaries') as ss:
+#     model.summary_scope = ss
 # model.default_dtype = tf.float32
 
 # Create the model
@@ -149,7 +151,8 @@ vals = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections 
 # pc_gt = mesh_summary.op('Ground truth', vertices = tf.expand_dims(model.val_gt[0, :, :], 0), colors = tf.constant([[[0, 154, 214]]], shape = [1, args.voxel_size, 3]))
 
 merged_train = [tf.summary.merge([ptraps[i]]) for i in range(model.stages)]
-merged_model_val = tf.summary.merge_all(scope = 'summaries')
+# merged_model_val = tf.summary.merge_all()
+# print("merged model val: " + str(merged_model_val))
 merged_val = tf.summary.merge([vals])
 # merged_mesh = tf.summary.merge([pc_rec, pc_gt])
 # merged_train = tf.summary.merge_all()
@@ -254,16 +257,57 @@ while True:
         feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
         
         if batch_idx_test % 200 == 0:
-            n_loss, summary, summary_2, _rec, _gt = sess.run([model.val_particleLoss, merged_val, merged_model_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
+            if model.edge_sample is not None:
+                n_loss, summary, _rec, _gt, esamp = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :], model.edge_sample[0]], feed_dict = feed_dict)
+            else:
+                n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
+            
             val_writer.add_summary(summary, batch_idx_test)
-            val_writer.add_summary(summary_2, batch_idx_test)
-            write_models(_rec, model.meta, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
+            # val_writer.add_summary(summary_2, batch_idx_test)
+            
+            if batch_idx_test == 200 and model.edge_sample is not None:
+                write_models(esamp, model.edge_sample[1], './previews/%s' % args.previewName, 'validation-%d-esamp.asc' % batch_idx_test)
+            
+            write_models(_rec, model.particle_meta, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
             write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
             # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
         else:
             n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
             val_writer.add_summary(summary, batch_idx_test)
         batch_idx_test += 1
+
+        if args.load == 'auto' and batch_idx_test == 1:
+
+            _, m_fea, _, _ = model.build_predict_Enc(model.ph_X, False, True)
+            e_fea = sess.run(m_fea, feed_dict = feed_dict)
+            e_shape = e_fea.shape
+            e_fea = e_fea.reshape([-1, args.cluster_dim])
+            embeddings = tf.Variable(e_fea, name = "cluster_embeddings")
+            emb_init_op = tf.initialize_variables([embeddings])
+            
+            emb_outPath = logPath + "/embeddings"
+            print("Making embeddings in %s" % emb_outPath)
+            
+            summary_writer_emb = tf.summary.FileWriter(emb_outPath)
+
+            if not os.path.exists(emb_outPath):
+                os.makedirs(emb_outPath)
+
+            with open(os.path.join(emb_outPath, "meta.tsv"), 'w') as tsv_file:
+                tsv_file.write("Index\tBatch\n")
+                for emb_bi in range(e_shape[0]):
+                    for emb_pi in range(e_shape[1]):
+                        tsv_file.write("%d\t%d\n" % (emb_bi * e_shape[1] + emb_pi, emb_bi))
+
+            config = projector.ProjectorConfig()
+            emb_config = config.embeddings.add()
+            emb_config.tensor_name = embeddings.name
+            emb_config.metadata_path = "meta.tsv"
+            projector.visualize_embeddings(summary_writer_emb, config)
+
+            sess.run(emb_init_op)
+            emb_saver = tf.train.Saver([embeddings])
+            emb_saver.save(sess, os.path.join(emb_outPath, "embeddings.ckpt"), 1)
 
         print(colored("(val =%7.4f)" % n_loss, 'blue'))
 

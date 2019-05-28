@@ -26,7 +26,7 @@ SN = False
 
 def norm(inputs, decay, is_train, name):
 
-    decay = 0.965
+    decay = 0.99
 
     # Disable norm
     # return inputs
@@ -135,6 +135,8 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
         kNNEdg = tf.concat([neighbor_pos], axis = -1) # [bs, Nx, k, eC]
         # kNNEdg = tf.concat([kNNEdg, neighbor_pos, neighbor_quadratic], axis = -1) # [bs, Nx, k, eC]
 
+        kNNEdg = tf.stop_gradient(kNNEdg)
+
         return posX, posY, kNNIdx, kNNEdg
 
 def kNNG_gen(inputs, k, pos_range, name = 'kNNG_gen'):
@@ -163,14 +165,17 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         mlp = mlp
         n = kNNEdg
         for i in range(len(mlp)):
-            n = autofc(n, mlp[i], tf.nn.elu, name = 'kernel/mlp%d' % i)
-            # n = norm(n, 0.999, is_train, 'kernel/norm')
-        
+            n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i)
+            n = norm(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
+            n = tf.nn.elu(n)
+
         n = autofc(n, channels * fCh, None, name = 'kernel/mlp_out')
         # n = autofc(n, channels * fCh, tf.nn.tanh, name = 'kernel/mlp_out')
 
-        with tf.variable_scope(summary_scope):
-            tf.summary.histogram('kernel weights', n)
+        # print(summary_scope)
+        if summary_scope is not None:
+            with tf.variable_scope(summary_scope):
+                tf.summary.histogram('kernel weights', n)
         
         cW = tf.reshape(n, [bs, N, k, channels, fCh])
         
@@ -273,11 +278,13 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
             fCh = 4
 
         if mlp == None:
-            mlp = [filters * 2]
+            # mlp = [filters * 2, filters * 2]
+            mlp = [filters * 3 // 2]
         
         n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv')
         if use_norm:
-            n = norm(n, 0.999, is_train, name = 'norm')
+            # n = norm(n, 0.999, is_train, name = 'norm')
+            pass
         if act:
             n = act(n)
     
@@ -301,7 +308,7 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
         
         return n
 
-def autofc(inputs, outDim, act = None, bias = True, name = 'fc'):
+def autofc(inputs, outDim, act = None, bias = True, name = 'fc', forceSN = False):
     
     input_shape = inputs.shape.as_list()
     inputs = tf.reshape(inputs, [-1, input_shape[-1]])
@@ -310,7 +317,7 @@ def autofc(inputs, outDim, act = None, bias = True, name = 'fc'):
         
         w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype)
 
-        if SN:
+        if SN or forceSN:
             x = tf.matmul(inputs, spectral_norm(w))
         else:
             x = tf.matmul(inputs, w)
@@ -382,8 +389,9 @@ class model_particles:
     # 1 of a batch goes in this function at once.
     def particleEncoder(self, input_particle, output_dim, early_stop = 0, is_train = False, reuse = False, returnPool = False):
 
-        w_init = tf.random_normal_initializer(stddev=self.wdev)
-        w_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype)
+        # w_init = tf.random_normal_initializer(stddev=self.wdev)
+        w_init = tf.random_normal_initializer(stddev = 0.01 * self.wdev)
+        # w_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype)
         b_init = tf.constant_initializer(value=0.0)
         g_init = tf.random_normal_initializer(1., 0.02)
 
@@ -421,6 +429,8 @@ class model_particles:
             if early_stop == 0:
                 target_block = blocks
 
+            edg_sample = None
+            
             for i in range(target_block):
                 
                 with tf.variable_scope('enc%d' % i):
@@ -443,6 +453,11 @@ class model_particles:
                         _, _, bpIdx, bpEdg = bip_kNNG_gen(gPos, prev_pos, bik[i], 3, name = 'gpool/ggen')
                         n = gconv(prev_n, bpIdx, bpEdg, channels[i], self.act, True, is_train, 'gpool/gconv', w_init, b_init)
 
+                    if i == 1:
+                        edg_sample = bpEdg[..., 0:3] + tf.random.uniform([self.batch_size, particles_count[i], 1, 3], minval = -24., maxval = 24.)
+                        edg_sample = tf.reshape(edg_sample, [-1, 3])
+                        edg_sample = [edg_sample, [self.batch_size * particles_count[i]]]
+
                     gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen')
 
                     n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init)
@@ -454,12 +469,18 @@ class model_particles:
             if self.useVector == True and early_stop == 0:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
-                    _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
-                    n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
-                    n = autofc(n, 512, self.act, name = 'globalPool/fc')
+                    # _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
+                    # n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
+                    # n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
-                    n = autofc(n, 512, name = 'globalPool/fc2')
+                    # n = autofc(n, 512, name = 'globalPool/fc2')
                     
+                    n = tf.concat([gPos, n], axis = -1) # [bs, ccnt, cdim + prange]
+                    n = autofc(n, 512, name = 'fc1')
+                    # n = norm(n, 0.999, is_train, name = 'norm')
+                    n = autofc(n, 512, name = 'fc2')
+                    n = tf.reduce_max(n, axis = 1, keepdims = True) # [bs, 1, 512]
+
                     # n = tf.reduce_max(n, axis = 1, keepdims = True)
                     # n = autofc(n, 512, name = 'fc1')
                     # n = autofc(n, 512, name = 'fc2')
@@ -470,7 +491,7 @@ class model_particles:
             if returnPool == True:
                 return gPos, n, var_list, pool_pos, freq_loss, pool_eval_func
 
-            return gPos, n, var_list, freq_loss, pool_eval_func
+            return gPos, n, var_list, freq_loss, pool_eval_func, edg_sample
     
     def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, begin_block = 0, is_train = False, reuse = False):
 
@@ -510,6 +531,9 @@ class model_particles:
             gen_hdim = config['decoder']['gen_hdim']
             knnk = config['decoder']['knnk']
             generator_struct = config['decoder']['genStruct']
+            genFeatures = False
+            if 'genFeatures' in config['decoder']:
+                genFeatures = config['decoder']['genFeatures']
 
             pos_range = 3
 
@@ -553,6 +577,9 @@ class model_particles:
                                 n = autofc(n, gen_hdim[bi], name = 'fc')
                                 # n = norm(n, 0.999, is_train, name = 'norm')
                                 n = self.act(n)
+                        
+                        if genFeatures:
+                            nf = autofc(n, hdim[bi], name = 'gen_feature_out')
                         n = autofc(n, pos_range, name = 'gen_out')
                         n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
                     
@@ -581,7 +608,8 @@ class model_particles:
                         # Regular generator
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
-                                z
+                                z = autofc(z, gen_hdim[bi], name = 'fc')
+                                z = self.act(z)
                         # Collect features
                         z = tf.multiply(w, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi], 1]))
                         z = tf.reduce_sum(z, axis = 3) # z <- [bs, coarse_cnt, n_per_cluster, pos_range]
@@ -598,6 +626,9 @@ class model_particles:
                         # n = norm_tun(n, maxLen[bi])
                         # n = maxLen[bi] * n
                         n_ref = norm_tun(n_ref, maxLen[bi])
+
+                    # regularizer to keep in local space
+                    regularizer += 0.0 * tf.reduce_mean(tf.norm(n, axis = -1))
 
                     # Back to world space
                     n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
@@ -617,8 +648,11 @@ class model_particles:
                     
                     # get feature
                     # Bipartite graph
-                    _, _, gp_idx, gp_edg = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bipggen')
-                    n = gconv(coarse_fea, gp_idx, gp_edg, hdim[bi], self.act, True, is_train, 'convt', w_init, b_init)
+                    if genFeatures:
+                        n = nf
+                    else:
+                        _, _, gp_idx, gp_edg = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bipggen')
+                        n = gconv(coarse_fea, gp_idx, gp_edg, hdim[bi], self.act, True, is_train, 'convt', w_init, b_init)
 
                     _, gidx, gedg = kNNG_gen(pos, knnk[bi], 3, name = 'ggen')
                     n = convRes(n, gidx, gedg, nConv[bi], nRes[bi], hdim[bi], self.act, True, is_train, 'resblock', w_init, b_init)
@@ -725,7 +759,7 @@ class model_particles:
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
 
             # Go through the particle AE
-            posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
+            posX, feaX, _v, _floss, eX, esamp = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
             outDim = self.outDim
             _, [rec_X, rec_X_ref, fold_X], _, r, meta = self.particleDecoder(posX, feaX, self.ph_card, outDim, is_train = is_train, reuse = reuse)
 
@@ -737,7 +771,7 @@ class model_particles:
             if is_train == True:
                 for i in range(len(self.stages)):
                     
-                    posX, feaX, _v, _floss, eX = self.particleEncoder(normalized_X, self.particle_latent_dim, early_stop = self.stages[i][0], is_train = is_train, reuse = True)
+                    posX, feaX, _v, _floss, eX, _ = self.particleEncoder(normalized_X, self.particle_latent_dim, early_stop = self.stages[i][0], is_train = is_train, reuse = True)
                     outDim = self.outDim
                     _, [rec_X, rec_X_ref, fold_X], _, r, _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, begin_block = self.stages[i][1], is_train = is_train, reuse = True)
                     
@@ -764,6 +798,7 @@ class model_particles:
                     vls.append(vs)
 
                     recLoss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                    recLoss += r
                     loss.append(recLoss)
             else:
                 rec = rec_X
@@ -772,7 +807,7 @@ class model_particles:
                 pos = posX
                 fea = feaX
 
-        return rec, normalized_X[:, :, 0:outDim], loss, vls, meta
+        return rec, normalized_X[:, :, 0:outDim], loss, vls, meta, esamp
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
@@ -820,11 +855,11 @@ class model_particles:
 
         # Train & Validation
         _, _,\
-        self.train_particleLosses, self.particle_vars, _ =\
+        self.train_particleLosses, self.particle_vars, _, _ =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
         self.val_rec, self.val_gt,\
-        self.val_particleLoss, _, self.particle_meta =\
+        self.val_particleLoss, _, self.particle_meta, self.edge_sample =\
             self.build_network(False, True, self.doLoop, self.doSim)
 
         self.train_ops = []

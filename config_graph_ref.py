@@ -59,6 +59,32 @@ k = 16
 
 config_dict = {
     # Graph
+    'regular_512d': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [vSize, 1280, 512, max(256, ccnt * 2), 32],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 1, 6],
+            'kernel_size' : [k, k, k, k, k],
+            'bik' : [0, 32, 32, 48, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'concat',
+        },
+        'stages': [[0, 0]]
+    },
     'regular': {
         'useVector': False,
         'encoder': {
@@ -74,7 +100,7 @@ config_dict = {
             'blocks' : 1,
             'pcnt' : [vSize], # particle count
             'generator' : [6], # Generator depth
-            'maxLen' : [1.5],
+            'maxLen' : [None],
             'nConv' : [0],
             'nRes' : [0],
             'hdim' : [hd // 3],
@@ -163,8 +189,114 @@ config_dict = {
         },
         'stages': [[0, 0]]
     },
+    'ultraShallow': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 2,
+            'particles_count' : [vSize, ccnt],
+            'conv_count' : [0, 0],
+            'res_count' : [0, 0],
+            'kernel_size' : [k, k],
+            'bik' : [0, 128],
+            'channels' : [1, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [4], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'concat',
+        },
+        'stages': [[0, 0]]
+    },
+    'ultraShallow_fS': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 2,
+            'particles_count' : [vSize, ccnt],
+            'conv_count' : [0, 0],
+            'res_count' : [0, 0],
+            'kernel_size' : [k, k],
+            'bik' : [0, 128],
+            'channels' : [1, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [4], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'final_selection',
+        },
+        'stages': [[0, 0]]
+    },
 
     # Vector
+    'vecRegular_noSep': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [vSize, 1280, 512, max(256, ccnt * 2), ccnt],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 1, 6],
+            'kernel_size' : [k, k, k, k, k],
+            'bik' : [0, 32, 32, 48, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [128, vSize], # particle count
+            'generator' : [5, 6], # Generator depth
+            'maxLen' : [None, None],
+            'nConv' : [2, 0],
+            'nRes' : [3, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k],
+            'genStruct' : 'concat',
+            'genFeatures' : True
+        },
+        'stages': [[0, 0]]
+    },
+    'vecRegular_ngF_noSep': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [vSize, 1280, 512, max(256, ccnt * 2), ccnt],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 1, 6],
+            'kernel_size' : [k, k, k, k, k],
+            'bik' : [0, 32, 32, 48, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [128, vSize], # particle count
+            'generator' : [5, 6], # Generator depth
+            'maxLen' : [None, None],
+            'nConv' : [2, 0],
+            'nRes' : [3, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k],
+            'genStruct' : 'concat',
+            'genFeatures' : False
+        },
+        'stages': [[0, 0]]
+    },
     'vecRegular': {
         'useVector': True,
         'encoder': {
@@ -179,15 +311,16 @@ config_dict = {
         'decoder': {
             'blocks' : 2,
             'pcnt' : [ccnt, vSize], # particle count
-            'generator' : [3, 6], # Generator depth
-            'maxLen' : [None, 1.5],
+            'generator' : [5, 6], # Generator depth
+            'maxLen' : [None, None],
             'nConv' : [2, 0],
             'nRes' : [3, 0],
             'hdim' : [max(ld, hd * 2), hd // 3],
             'fdim' : [512, ld], # dim of features used for folding
             'gen_hdim' : [512, ld],
-            'knnk' : [k, k // 2],
+            'knnk' : [k, k],
             'genStruct' : 'concat',
+            'genFeatures' : True
         },
         'stages': [[5, 1], [0, 0]]
     },
@@ -206,7 +339,7 @@ config_dict = {
             'blocks' : 2,
             'pcnt' : [ccnt, vSize], # particle count
             'generator' : [3, 6], # Generator depth
-            'maxLen' : [None, 1.5],
+            'maxLen' : [None, None],
             'nConv' : [2, 0],
             'nRes' : [3, 0],
             'hdim' : [max(ld, hd * 2), hd // 3],
@@ -216,6 +349,87 @@ config_dict = {
             'genStruct' : 'final_selection',
         },
         'stages': [[5, 1], [0, 0]]
+    },
+    'vecSmall': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [vSize, 512, ccnt],
+            'conv_count' : [1, 2, 0],
+            'res_count' : [0, 0, 2],
+            'kernel_size' : [k, k, k],
+            'bik' : [0, 64, 64],
+            'channels' : [hd // 2, hd, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [ccnt, vSize], # particle count
+            'generator' : [5, 5], # Generator depth
+            'maxLen' : [None, None],
+            'nConv' : [2, 0],
+            'nRes' : [2, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k],
+            'genStruct' : 'concat',
+            'genFeatures' : True
+        },
+        'stages': [[3, 1], [0, 0]]
+    },
+    'vecSmall_ngF_noSep': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [vSize, 512, ccnt],
+            'conv_count' : [1, 2, 0],
+            'res_count' : [0, 0, 4],
+            'kernel_size' : [k, k, k],
+            'bik' : [0, 64, 64],
+            'channels' : [hd // 2, hd, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [ccnt, vSize], # particle count
+            'generator' : [5, 5], # Generator depth
+            'maxLen' : [None, None],
+            'nConv' : [1, 0],
+            'nRes' : [1, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k],
+            'genStruct' : 'concat',
+            'genFeatures' : False
+        },
+        'stages': [[0, 0]]
+    },
+    'vecSmall_noSep': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [vSize, 512, ccnt],
+            'conv_count' : [1, 2, 0],
+            'res_count' : [0, 0, 4],
+            'kernel_size' : [k, k, k],
+            'bik' : [0, 64, 64],
+            'channels' : [hd // 2, hd, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [ccnt, vSize], # particle count
+            'generator' : [5, 5], # Generator depth
+            'maxLen' : [None, None],
+            'nConv' : [1, 0],
+            'nRes' : [1, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k],
+            'genStruct' : 'concat',
+            'genFeatures' : True
+        },
+        'stages': [[0, 0]]
     },
     'vecSingle': {
         'useVector': True,
@@ -232,7 +446,60 @@ config_dict = {
             'blocks' : 1,
             'pcnt' : [vSize], # particle count
             'generator' : [6], # Generator depth
-            'maxLen' : [1.5],
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'concat',
+        },
+        'stages': [[0, 0]]
+    },
+    'vecSingleSmall': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [vSize, 512, ccnt],
+            'conv_count' : [1, 2, 0],
+            'res_count' : [0, 0, 2],
+            'kernel_size' : [k, k, k],
+            'bik' : [0, 64, 64],
+            'channels' : [hd // 2, hd, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'concat',
+        },
+        'stages': [[0, 0]]
+    },
+    
+    'vecUltraShallow': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 1,
+            'particles_count' : [vSize],
+            'conv_count' : [2],
+            'res_count' : [0],
+            'kernel_size' : [k],
+            'bik' : [0],
+            'channels' : [hd],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [None],
             'nConv' : [0],
             'nRes' : [0],
             'hdim' : [hd // 3],
@@ -245,4 +512,4 @@ config_dict = {
     },
 }
 
-config = config_dict['regular']
+config = config_dict['vecRegular']
