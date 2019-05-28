@@ -12,8 +12,8 @@ import os
 
 from termcolor import colored, cprint
 
-import model_graph_ref as model
-from model_graph_ref import model_particles as model_net
+import model_graph_sim as model
+from model_graph_sim import model_particles as model_net
 
 # import model_graph as model
 # from model_graph import model_particles as model_net
