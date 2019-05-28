@@ -34,8 +34,8 @@ config_dict = {
             'genFeatures' : True,
         },
         'simulator': {
-            'knnk': k
-            'layers': [256]
+            'knnk': k,
+            'layers': [256],
         },
         'stages': [[0, 0]]
     },
@@ -65,8 +65,8 @@ config_dict = {
             'genFeatures' : True,
         },
         'simulator': {
-            'knnk': k
-            'layers': [256]
+            'knnk': k,
+            'layers': [256],
         },
         'stages': [[0, 0]]
     },
@@ -96,8 +96,8 @@ config_dict = {
             'genFeatures' : True,
         },
         'simulator': {
-            'knnk': k
-            'layers': [256]
+            'knnk': k,
+            'layers': [256],
         },
         'stages': [[0, 0]]
     },
@@ -127,8 +127,8 @@ config_dict = {
             'genFeatures' : True,
         },
         'simulator': {
-            'knnk': k
-            'layers': [256]
+            'knnk': k,
+            'layers': [256],
         },
         'stages': [[0, 0]]
     },
