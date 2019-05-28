@@ -31,6 +31,7 @@ config_dict = {
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
             'genStruct' : 'concat',
+            'genFeatures' : True,
         },
         'simulator': {
             'knnk': k
@@ -61,6 +62,7 @@ config_dict = {
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
             'genStruct' : 'concat',
+            'genFeatures' : True,
         },
         'simulator': {
             'knnk': k
@@ -91,6 +93,7 @@ config_dict = {
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
             'genStruct' : 'concat',
+            'genFeatures' : True,
         },
         'simulator': {
             'knnk': k
@@ -121,6 +124,7 @@ config_dict = {
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
             'genStruct' : 'concat',
+            'genFeatures' : True,
         },
         'simulator': {
             'knnk': k
