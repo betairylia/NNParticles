@@ -145,11 +145,13 @@ model.build_model()
 # Summary the variables
 trats = tf.summary.scalar('Training Loss', model.train_particleLoss, collections = None)
 trass = tf.summary.scalar('Training Sim Loss', model.train_simLoss, collections = None)
+trals = tf.summary.scalar('Training Loop Sim Loss', model.train_lsimLoss, collections = None)
 valts = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections = None)
 valss = tf.summary.scalar('Validation Sim Loss', model.val_simLoss, collections = None)
+valls = tf.summary.scalar('Validation Loop Sim Loss', model.val_lsimLoss, collections = None)
 
-merged_train = tf.summary.merge([trats, trass])
-merged_val = tf.summary.merge([valts, valss])
+merged_train = tf.summary.merge([trats, trass, trals])
+merged_val = tf.summary.merge([valts, valss, valls])
 
 # Create session
 config = tf.ConfigProto()
@@ -235,11 +237,11 @@ while True:
             feed_dict = { model.ph_X: _x[0], model.ph_Y: _x[1], model.ph_L: _x[2], model.ph_card: _x_size, model.ph_max_length: maxl_array }
 
             n_losses = []
-            for i in range(model.stages):
-                _, n_loss, summary = sess.run([model.train_ops[i], model.train_particleLosses[i], merged_train[i]], feed_dict = feed_dict)
-                train_writer.add_summary(summary, batch_idx_train)
-                n_losses.append(n_loss)
-            
+            # for i in range(model.stages):
+            _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict)
+            train_writer.add_summary(summary, batch_idx_train)
+            n_losses.append(n_loss)
+        
             batch_idx_train += 1
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ', end = '')

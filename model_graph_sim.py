@@ -711,9 +711,9 @@ class model_particles:
             Np = particles.shape[1]
             Ng = groundtruth.shape[1]
             
-            match = approx_match(groundtruth, particles_ref) # [bs, Np, Ng]
-            row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, Np, 1, pos_range])
-            col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, Ng, pos_range])
+            match = approx_match(groundtruth[:, :, 0:pos_range], particles_ref[:, :, 0:pos_range]) # [bs, Np, Ng]
+            row_predicted = tf.reshape(  particles[:, :, 0:self.outDim], [bs, Np, 1, -1])
+            col_groundtru = tf.reshape(groundtruth[:, :, 0:self.outDim], [bs, 1, Ng, -1])
             distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
             distance = distance * match
             distance_loss = tf.reduce_mean(tf.reduce_sum(distance, axis = -1))
@@ -814,8 +814,31 @@ class model_particles:
                 simLoss = forward_loss + backwrd_loss
 
                 if loopSim == True:
-                    raise NotImplementedError
+                    normalized_L = self.ph_Y / self.normalize
+                    posL, feaL, _v, _floss, eY, esamp = self.particleEncoder(normalized_L, self.particle_latent_dim, is_train = is_train, reuse = True)
 
+                    # X => L
+                    plsimL = posX
+                    flsimL = feaX
+                    for li in range(self.loops):
+                        plsimL, flsimL = self.simulator(plsimL, flsimL, name = 'Simulator', is_train = is_train, reuse = True)
+
+                    # L => X
+                    plsimX = posL
+                    flsimX = feaX
+                    for li in range(self.loops):
+                        plsimX, flsimX = self.simulator(plsimX, flsimX, name = 'SimulatorInv', is_train = is_train, reuse = True)
+
+                    # Decoders
+                    _, [rec_lsim_X, _, _], _, r, meta = self.particleDecoder(plsimX, flsimX, self.ph_card, outDim, is_train = is_train, reuse = True)
+                    _, [rec_lsim_L, _, _], _, r, meta = self.particleDecoder(plsimL, flsimL, self.ph_card, outDim, is_train = is_train, reuse = True)
+
+                    forward_l_loss = self.chamfer_metric(rec_lsim_X, rec_lsim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                    backwrd_l_loss = self.chamfer_metric(rec_lsim_L, rec_lsim_L, normalized_L[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+            
+                    loss += forward_l_loss + backwrd_l_loss
+                    lsimLoss = forward_l_loss + backwrd_l_loss
+            
             if is_train == True:
                 rec = rec_X
                 vls = []
@@ -828,7 +851,7 @@ class model_particles:
                 pos = posX
                 fea = feaX
 
-        return rec, normalized_X[:, :, 0:outDim], loss, vls, meta, esamp, simLoss
+        return rec, normalized_X[:, :, 0:outDim], loss, vls, meta, esamp, simLoss, lsimLoss
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
@@ -845,7 +868,7 @@ class model_particles:
             floss = 0
 
             # Enc(X)
-            posX, feaX, _v, pPos, _floss, evals = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse, returnPool = True)
+            posX, feaX, _v, pPos, _floss, evals = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
             var_list.append(_v)
             floss += _floss
 
@@ -856,7 +879,7 @@ class model_particles:
 
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
-            sim_posY, sim_feaY, _v = self.simulator(pos, fea, 'Simulator', is_train, reuse)
+            sim_posY, sim_feaY = self.simulator(pos, fea, 'Simulator', is_train, reuse)
         
         return sim_posY, sim_feaY
 
@@ -876,11 +899,11 @@ class model_particles:
 
         # Train & Validation
         _, _,\
-        self.train_particleLoss, self.particle_vars, _, _, self.train_simLoss =\
+        self.train_particleLoss, self.particle_vars, _, _, self.train_simLoss, self.train_lsimLoss =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
         self.val_rec, self.val_gt,\
-        self.val_particleLoss, _, self.particle_meta, self.edge_sample, self.val_simLoss =\
+        self.val_particleLoss, _, self.particle_meta, self.edge_sample, self.val_simLoss , self.val_lsimLoss=\
             self.build_network(False, True, self.doLoop, self.doSim)
 
         self.train_ops = []
