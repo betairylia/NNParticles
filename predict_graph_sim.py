@@ -293,7 +293,7 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
     #     print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("Validation It %08d" % batch_idx_test, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
 
-outpath = os.path.join('MDSets/results/ShapeNet_CC', args.name)
+outpath = os.path.join('MDSets/results/fluids', args.name)
 
 if not os.path.exists(outpath):
     os.makedirs(outpath)
