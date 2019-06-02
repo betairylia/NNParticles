@@ -14,18 +14,18 @@ FILE_PATH = '/home/betairya/RP_CG/mantaflow/manta/build/dataset_fluids/raws'
 # outpath = 'MDSets/LSsim_combined_2560_tst/'
 # outpath = 'MDSets/LSsim_combined_2560_validation_ss600/'
 # outpath = '/media/betairya/Data Disk/Datasets/MDSet_sim_5_loop30/'
-outpath = 'MDSets/fluid_1_l28'
+outpath = '/mnt/93196856-2b8a-4c7b-a37b-6affb441b6e0/Datasets/fluids_ds5/'
 particles = 5120
 
 step_count = 380
 start_step = 0
-singlefile_sim_count = 88
-combines = 4
+singlefile_sim_count = 60
+combines = 5
 
-single_sim_steps = 1
+single_sim_steps = 5
 long_sim_loops = 28
 
-maxtotalfiles = 968
+maxtotalfiles = 960
 shuffle_steps = True
 skip_steps = False
 

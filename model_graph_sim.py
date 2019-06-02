@@ -870,7 +870,7 @@ class model_particles:
             # Enc(X)
             posX, feaX, _v, pPos, _floss, evals = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
             var_list.append(_v)
-            floss += _floss
+            # floss += _floss
 
         return posX, feaX, pPos, evals
     
@@ -888,10 +888,10 @@ class model_particles:
 
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
-            _, [rec, _, rec_f], _, _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train = is_train, reuse = reuse)
+            _, [rec, _, rec_f], _, _, _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train = is_train, reuse = reuse)
 
         rec = rec
-        reconstruct_loss = self.chamfer_metric(rec, gt, 3, self.loss_func, True) * 40.0
+        reconstruct_loss = self.chamfer_metric(rec, rec, gt, 3, tf.square, EMD = True)
 
         return rec * self.normalize, rec_f * self.normalize, reconstruct_loss
 
