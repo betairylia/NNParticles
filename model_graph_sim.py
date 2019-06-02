@@ -141,6 +141,52 @@ def kNNG_gen(inputs, k, pos_range, name = 'kNNG_gen'):
     p, _, idx, edg = bip_kNNG_gen(inputs, inputs, k, pos_range, name)
     return p, idx, edg
 
+def bip_kNNGConvLayer_IN(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name):
+    
+    with tf.variable_scope(name):
+
+        bs = inputs.shape[0]
+        Ni = inputs.shape[1]
+        Ci = inputs.shape[2]
+        N  = kNNIdx.shape[1]
+        k  = kNNIdx.shape[2]
+        eC = kNNEdg.shape[3]
+
+        neighbors = tf.gather_nd(inputs, kNNIdx)
+        origins = tf.broadcast_to(tf.reshape(inputs, [bs, Ni, 1, Ci]), [bs, Ni, k, Ci])
+
+        # Encode edge
+        e_enc_mlp = [64]
+        e_encoded = kNNEdg
+        for i in range(len(e_enc_mlp)):
+            e_encoded = autofc(e_encoded, e_enc_mlp[i], None, name = 'eEnc/mlp%d' % i)
+            e_encoded = norm(e_encoded, 0.999, is_train, 'eEnc/mlp%d/norm' % i)
+            e_encoded = tf.nn.elu(e_encoded)
+        e_encoded = autofc(e_encoded, 64, None, name = 'eEnc/mlp_out')
+
+        # Relation (edge) stage
+        e_mlp = [200]
+        e_in = tf.concat([e_encoded, neighbors, origins], axis = -1)
+
+        e = e_in
+        for i in range(len(e_mlp)):
+            e = autofc(e, e_mlp[i], tf.nn.elu, name = 'eStage/mlp%d' % i)
+        e = autofc(e, 64, None, name = 'eStage/mlp_out')
+
+        # Sum-up
+        e_sum = tf.reduce_mean(e, axis = 2)
+
+        # Node stage
+        n_mlp = [200]
+        n_in = tf.concat([e_sum, inputs], axis = -1)
+
+        n = n_in
+        for i in range(len(n_mlp)):
+            n = autofc(n, n_mlp[i], tf.nn.elu, name = 'nStage/mlp%d' % i)
+        n = autofc(n, 64, None, name = 'nStage/mlp_out')
+
+    return n # [bs, Nx, channels]
+
 def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name):
     
     with tf.variable_scope(name):
@@ -685,17 +731,19 @@ class model_particles:
         with tf.variable_scope(name, reuse = reuse) as vs:
             
             _, gIdx, gEdg = kNNG_gen(pos, config['simulator']['knnk'], 3, name = 'simulator/ggen')
-            layers = config['simulator']['layers']
-            n = particles
-            Np = particles.shape[1]
-            C = particles.shape[2]
+            # layers = config['simulator']['layers']
+            # n = particles
+            # Np = particles.shape[1]
+            # C = particles.shape[2]
 
-            nn = n
+            # nn = n
 
-            for i in range(len(layers)):
-                nn = gconv(nn, gIdx, gEdg, layers[i], self.act, True, is_train = is_train, name = 'gconv%d' % i, W_init = w_init, b_init = b_init)
+            # for i in range(len(layers)):
+                # nn = gconv(nn, gIdx, gEdg, layers[i], self.act, True, is_train = is_train, name = 'gconv%d' % i, W_init = w_init, b_init = b_init)
 
-            nn = gconv(nn, gIdx, gEdg, C, self.act, True, is_train = is_train, name = 'gconvLast', W_init = w_init, b_init = b_init)
+            # nn = gconv(nn, gIdx, gEdg, C, self.act, True, is_train = is_train, name = 'gconvLast', W_init = w_init, b_init = b_init)
+            
+            nn = bip_kNNGConvLayer_IN(particles, gIdx, gEdg, self.act, 64, 6, [64], is_train, w_init, b_init, 'gconv0')
             n = n + nn
             
             dPos = gconv(n, gIdx, gEdg, 3, self.act, True, is_train = is_train, name = 'gconvPos', W_init = w_init, b_init = b_init)
