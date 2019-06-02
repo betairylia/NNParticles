@@ -1,7 +1,6 @@
 # python train_particleTest.py -gpu 2 -ep 20 -bs 128 -vSize 22 -vm 10 -zdim 30 -hdim 64 -enc plain -dec plain -log log_particleTest -name Plain_Plain_bs128_z30h64_gs8_gm22 MDSets/2560_smallGrid/
 
 import tensorflow as tf
-import tensorlayer as tl
 import numpy as np
 import scipy
 import time
@@ -200,7 +199,7 @@ stepFactor = 9
 
 bs = args.batch_size
 N = args.voxel_size
-totalIterations = 90
+totalIterations = 200
 
 groundTruth = np.zeros((totalIterations * bs, N, outDim))
 groundTrutX = np.zeros((totalIterations * bs, N, outDim))
@@ -232,7 +231,7 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
         # Initial batch - compute latent clusters
         if ecnt == 0 and args.dosim:
-            _cpos, _cfea, eX = sess.run([cpos, cfea, evalsX], feed_dict = { model.ph_X: _x[0] })
+            _cpos, _cfea = sess.run([cpos, cfea], feed_dict = { model.ph_X: _x[0] })
             _spos, _sfea = _cpos, _cfea
             _rec, n_loss = sess.run([prec, ___l], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
 
@@ -253,7 +252,7 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
             # _cpos_y, _cfea_y = sess.run([cpos_Y, cfea_Y], feed_dict = { model.ph_Y: _x[1] })
         else:
             # Just do auto-encoder
-            _cpos, _cfea, pX, eX = sess.run([cpos, cfea, poolX, evalsX], feed_dict = {model.ph_X: _x[0]})
+            _cpos, _cfea, pX = sess.run([cpos, cfea, poolX], feed_dict = {model.ph_X: _x[0]})
             # print(_cfea)
             _rec, _recf, n_loss = sess.run([prec, precf, ___l], feed_dict = { ph_cpos: _cpos, ph_cfea: _cfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
 
