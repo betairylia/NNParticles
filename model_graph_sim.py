@@ -183,7 +183,7 @@ def bip_kNNGConvLayer_IN(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_tra
         n = n_in
         for i in range(len(n_mlp)):
             n = autofc(n, n_mlp[i], tf.nn.elu, name = 'nStage/mlp%d' % i)
-        n = autofc(n, 64, None, name = 'nStage/mlp_out')
+        n = autofc(n, channels, None, name = 'nStage/mlp_out')
 
     return n # [bs, Nx, channels]
 
@@ -731,22 +731,33 @@ class model_particles:
         with tf.variable_scope(name, reuse = reuse) as vs:
             
             _, gIdx, gEdg = kNNG_gen(pos, config['simulator']['knnk'], 3, name = 'simulator/ggen')
-            # layers = config['simulator']['layers']
-            # n = particles
-            # Np = particles.shape[1]
-            # C = particles.shape[2]
+            layers = config['simulator']['layers']
+            n = particles
+            Np = particles.shape[1]
+            C = particles.shape[2]
 
-            # nn = n
+            if False:
 
-            # for i in range(len(layers)):
-                # nn = gconv(nn, gIdx, gEdg, layers[i], self.act, True, is_train = is_train, name = 'gconv%d' % i, W_init = w_init, b_init = b_init)
+                nn = n
 
-            # nn = gconv(nn, gIdx, gEdg, C, self.act, True, is_train = is_train, name = 'gconvLast', W_init = w_init, b_init = b_init)
+                for i in range(len(layers)):
+                    nn = gconv(nn, gIdx, gEdg, layers[i], self.act, True, is_train = is_train, name = 'gconv%d' % i, W_init = w_init, b_init = b_init)
+
+                nn = gconv(nn, gIdx, gEdg, C, self.act, True, is_train = is_train, name = 'gconvLast', W_init = w_init, b_init = b_init)
             
-            nn = bip_kNNGConvLayer_IN(particles, gIdx, gEdg, self.act, 64, 6, [64], is_train, w_init, b_init, 'gconv0')
+            else:
+            
+                nn = bip_kNNGConvLayer_IN(n, gIdx, gEdg, self.act, C, 6, [64], is_train, w_init, b_init, 'gconv0')
+                # nn = norm(nn, 0.999, is_train, 'gconv0/norm')
+            
             n = n + nn
             
-            dPos = gconv(n, gIdx, gEdg, 3, self.act, True, is_train = is_train, name = 'gconvPos', W_init = w_init, b_init = b_init)
+            pmlp = [128]
+            for i in range(len(pmlp)):
+                dPos = autofc(n, pmlp[i], tf.nn.elu, name = 'pRefine/mlp%d' % i)
+            dPos = autofc(n, 3, None, name = 'pRefine/mlp_out')
+            # dPos = norm(dPos, 0.999, is_train, 'pRefine/norm')
+
             pos += dPos
 
         return pos, n
@@ -855,8 +866,14 @@ class model_particles:
                 _, [rec_sim_X, _, _], _, r, meta = self.particleDecoder(psimX, fsimX, self.ph_card, outDim, is_train = is_train, reuse = True)
                 _, [rec_sim_Y, _, _], _, r, meta = self.particleDecoder(psimY, fsimY, self.ph_card, outDim, is_train = is_train, reuse = True)
 
-                forward_loss = self.chamfer_metric(rec_sim_X, rec_sim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
-                backwrd_loss = self.chamfer_metric(rec_sim_Y, rec_sim_Y, normalized_Y[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                # forward_loss = self.chamfer_metric(rec_sim_X, rec_sim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                # backwrd_loss = self.chamfer_metric(rec_sim_Y, rec_sim_Y, normalized_Y[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                backwrd_loss = self.chamfer_metric(tf.concat([psimX, fsimX], axis = -1), tf.concat([psimX, fsimX], axis = -1), tf.concat([posX, feaX], axis = -1), 3, self.loss_func, EMD = True)
+                forward_loss = self.chamfer_metric(tf.concat([psimY, fsimY], axis = -1), tf.concat([psimY, fsimY], axis = -1), tf.concat([posY, feaY], axis = -1), 3, self.loss_func, EMD = True)
+                
+                if loopSim == True:
+                    backwrd_loss = 0
+                    forward_loss = 0
 
                 loss += forward_loss + backwrd_loss
                 simLoss = forward_loss + backwrd_loss
@@ -881,8 +898,10 @@ class model_particles:
                     _, [rec_lsim_X, _, _], _, r, meta = self.particleDecoder(plsimX, flsimX, self.ph_card, outDim, is_train = is_train, reuse = True)
                     _, [rec_lsim_L, _, _], _, r, meta = self.particleDecoder(plsimL, flsimL, self.ph_card, outDim, is_train = is_train, reuse = True)
 
-                    forward_l_loss = self.chamfer_metric(rec_lsim_X, rec_lsim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
-                    backwrd_l_loss = self.chamfer_metric(rec_lsim_L, rec_lsim_L, normalized_L[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                    backwrd_l_loss = self.chamfer_metric(tf.concat([plsimX, flsimX], axis = -1), tf.concat([plsimX, flsimX], axis = -1), tf.concat([posX, feaX], axis = -1), 3, self.loss_func, EMD = True)
+                    forward_l_loss = self.chamfer_metric(tf.concat([plsimL, flsimL], axis = -1), tf.concat([plsimL, flsimL], axis = -1), tf.concat([posL, feaL], axis = -1), 3, self.loss_func, EMD = True)
+                    # forward_l_loss = self.chamfer_metric(rec_lsim_X, rec_lsim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                    # backwrd_l_loss = self.chamfer_metric(rec_lsim_L, rec_lsim_L, normalized_L[:, :, 0:outDim], 3, self.loss_func, EMD = True)
             
                     loss += forward_l_loss + backwrd_l_loss
                     lsimLoss = forward_l_loss + backwrd_l_loss
