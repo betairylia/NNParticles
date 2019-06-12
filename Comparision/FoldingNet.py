@@ -341,11 +341,12 @@ class model_particles:
 
         with tf.variable_scope("ParticleDecoder", reuse = reuse) as vs:
 
+            inputs = getGrids(groundTruth_card, 1.0, self.batch_size)
+            
             bs = self.batch_size
             N  = inputs.shape[1]
             lC = latent.shape[1]
 
-            inputs = getGrids(groundTruth_card, 1.0, self.batch_size)
             latent = tf.broadcast_to(tf.reshape(latent, [bs, 1, lC]), [bs, N, lC])
 
             inputs = tf.concat([inputs, latent], axis = -1)
@@ -357,9 +358,9 @@ class model_particles:
 
             n = tf.concat([n, latent], axis = -1)
 
-            n = autofc(n, 128, tf.nn.relu, True, 'pfc1')
-            n = autofc(n, 128, tf.nn.relu, True, 'pfc2')
-            n = autofc(n, output_dim, tf.nn.relu, True, 'pfc3')
+            n = autofc(n, 128, tf.nn.relu, True, 'pfc4')
+            n = autofc(n, 128, tf.nn.relu, True, 'pfc5')
+            n = autofc(n, output_dim, tf.nn.relu, True, 'pfc6')
 
         return n
  
