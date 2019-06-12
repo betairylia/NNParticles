@@ -240,17 +240,13 @@ while True:
             
             feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array }
 
-            n_losses = []
-            for i in range(model.stages):
-                _, n_loss, summary = sess.run([model.train_ops[i], model.train_particleLosses[i], merged_train[i]], feed_dict = feed_dict)
-                train_writer.add_summary(summary, batch_idx_train)
-                n_losses.append(n_loss)
+            _, n_loss, summary = sess.run([model.train_op, model.train_particleLoss, merged_train], feed_dict = feed_dict)
+            train_writer.add_summary(summary, batch_idx_train)
             
             batch_idx_train += 1
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ', end = '')
-        for i in range(len(n_losses)):
-            print(colored("Stg%d =%7.4f" % (i, n_losses[i]), 'green'), end = ' ')
+        print(colored("Train =%7.4f" % (i, n_loss), 'green'), end = ' ')
 
         _vx, _vx_size = next(batch_validate, [None, None])
         
