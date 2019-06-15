@@ -187,16 +187,16 @@ def getGrids(n, r, bs):
 
     x = tf.linspace(-(r / 2.0), r / 2.0, nsq)
 
-    return tf.broadcast_to(tf.reshape(tf.stack(tf.meshgrid(x, x), axis = -1), [1, -1, 2]), [bs, nsq*nsq, 2])
+    return tf.broadcast_to(tf.reshape(tf.stack(tf.meshgrid(x, x), axis = -1), [1, -1, 2]), [bs, nsq*nsq, 2]), nsq * nsq
 
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
-def kNNGPooling_rand(inputs, pos, k, name = 'kNNGPool'):
+def kNNGPooling_rand(inputs, pos, k, bs, N, name = 'kNNGPool'):
 
     with tf.variable_scope(name):
 
-        bs = pos.shape[0]
-        N = pos.shape[1]
+        # bs = pos.shape[0]
+        # N = pos.shape[1]
         k = min(N, k)
 
         y = tf.random.uniform([bs, N]) # [bs, N]
@@ -341,10 +341,9 @@ class model_particles:
 
         with tf.variable_scope("ParticleDecoder", reuse = reuse) as vs:
 
-            inputs = getGrids(groundTruth_card, 1.0, self.batch_size)
+            inputs, N = getGrids(groundTruth_card, 1.0, self.batch_size)
             
             bs = self.batch_size
-            N  = inputs.shape[1]
             lC = latent.shape[1]
 
             latent = tf.broadcast_to(tf.reshape(latent, [bs, 1, lC]), [bs, N, lC])
@@ -362,7 +361,7 @@ class model_particles:
             n = autofc(n, 128, tf.nn.relu, True, 'pfc5')
             n = autofc(n, output_dim, None, True, 'pfc6')
 
-            n, _ = kNNGPooling_rand(n, n, groundTruth_card, name = 'randomSelection')
+            n, _ = kNNGPooling_rand(n, n, groundTruth_card, bs, N, name = 'randomSelection')
 
         return n
  
