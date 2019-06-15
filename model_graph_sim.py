@@ -21,6 +21,36 @@ default_dtype = tf.float32
 summary_scope = None
 SN = False
 
+def lnorm(inputs, decay, is_train, name):
+
+    decay = 0.99
+
+    # Disable norm
+    # return inputs
+
+    # if default_dtype == tf.float32:
+    #     return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
+    # if default_dtype == tf.float16:
+    #     return BatchNormalizationF16(momentum = decay)(inputs, training = is_train)
+   
+    # return tf.keras.layers.BatchNormalization(momentum = decay)(inputs, training = is_train)
+    # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, fused = True)
+    
+    # Batch re-norm
+    # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, scope = name, fused = True, renorm = True)
+    # return tf.contrib.layers.batch_norm(inputs, decay = decay, is_training = is_train, scope = name, fused = True)
+    
+    # Layer norm
+    return tf.contrib.layers.layer_norm(inputs, scope = name)
+    
+    # Instance norm 
+    if False:
+        if default_dtype == tf.float32:
+            return tf.contrib.layers.instance_norm(inputs, scope = name)
+        else:
+            return tf.contrib.layers.instance_norm(inputs, epsilon = 1e-3, scope = name)
+    # return tf.contrib.layers.group_norm(inputs, 
+
 def norm(inputs, decay, is_train, name):
 
     decay = 0.99
@@ -340,11 +370,14 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
         n = inputs
         tmp = n
         for r in range(num_res):
-            nn = n
             with tf.variable_scope('res%d' % r):
-                for c in range(num_conv):
-                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp)
-            n = n + nn
+                n = gconv(n, gidx, gedg, filters, act, use_norm, is_train, 'conv0', W_init, b_init, mlp)
+                nn = n
+                for c in range(num_conv - 1):
+                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % (c+1), W_init, b_init, mlp)
+            
+            if num_conv >= 1:
+                n = n + nn
         
         if num_res > 1:
             n = n + tmp
@@ -461,7 +494,7 @@ class model_particles:
                 bik = kernel_size
             
             gPos = input_particle[:, :, :3]
-            n = input_particle[:, :, self.outDim:] # Ignore velocity
+            n = input_particle[:, :, 3:] # DO NOT Ignore velocity
             var_list = []
             pool_pos = []
             pool_eval_func = []
@@ -736,7 +769,7 @@ class model_particles:
             Np = particles.shape[1]
             C = particles.shape[2]
 
-            if False:
+            if True:
 
                 nn = n
 
@@ -748,7 +781,7 @@ class model_particles:
             else:
             
                 nn = bip_kNNGConvLayer_IN(n, gIdx, gEdg, self.act, C, 6, [64], is_train, w_init, b_init, 'gconv0')
-                # nn = norm(nn, 0.999, is_train, 'gconv0/norm')
+                nn = lnorm(nn, 0.999, is_train, 'gconv0/norm')
             
             n = n + nn
             

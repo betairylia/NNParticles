@@ -48,7 +48,7 @@ parser.add_argument('-cdim', '--cluster-dim', type = int, default = 32, help = "
 parser.add_argument('-ccnt', '--cluster-count', type = int, default = 64, help = "How many neighbors should be considered in the graph network")
 parser.add_argument('-odim', '--output-dim', type = int, default = 6, help = "What kind of data should we output?")
 parser.add_argument('-knnk', '--nearest-neighbor', type = int, default = 16, help = "How many neighbors should be considered in the graph network")
-parser.add_argument('-loop', '--loop-sim', type = int, default = 5, help = "Loop simulation sim count")
+parser.add_argument('-loop', '--loop-sim', type = int, default = 28, help = "Loop simulation sim count")
 
 parser.add_argument('-lr', '--learning-rate', type = float, default = 0.0003, help = "learning rate")
 parser.add_argument('-beta1', '--beta1', type = float, default = 0.9, help = "beta1")

@@ -1,7 +1,9 @@
 
 vSize = 5120
-ccnt = 64
-cdim = 32
+# ccnt = 64
+# cdim = 32
+ccnt = 256
+cdim = 16
 hd = 64
 ld = 128
 k = 16

@@ -246,7 +246,7 @@ while True:
             batch_idx_train += 1
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ', end = '')
-        print(colored("Train =%7.4f" % (i, n_loss), 'green'), end = ' ')
+        print(colored("Train =%7.4f" % (n_loss), 'green'), end = ' ')
 
         _vx, _vx_size = next(batch_validate, [None, None])
         
