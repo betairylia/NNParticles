@@ -532,6 +532,9 @@ class model_particles:
             knnk = config['decoder']['knnk']
             generator_struct = config['decoder']['genStruct']
             genFeatures = False
+            monotonic = False
+            if 'mono' in config['decoder']:
+                monotonic = config['decoder']['mono']
             if 'genFeatures' in config['decoder']:
                 genFeatures = config['decoder']['genFeatures']
 
@@ -567,6 +570,7 @@ class model_particles:
                         # generator
                         # int_meta = tf.broadcast_to(tf.reshape(int_meta, [self.batch_size, coarse_cnt, 1, -1]), [self.batch_size, coarse_cnt, n_per_cluster, 1])
                         z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        uniform_dist = z
                         fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
                         z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
                         
@@ -604,6 +608,7 @@ class model_particles:
                             b = tf.reshape(b, [self.batch_size, coarse_cnt, 1, pos_range])
 
                         z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        uniform_dist = z
 
                         # Regular generator
                         for gi in range(generator[bi]):
@@ -675,7 +680,11 @@ class model_particles:
                 n = autofc(n, output_dim - pos_range, name = 'dec%d/finalLinear' % (blocks - 1))
                 final_particles = tf.concat([pos, n], -1)
 
-            regularizer = regularizer / blocks
+            # regularizer = regularizer / blocks
+            if monotonic:
+                jacobian = tf.gradients(pos, uniform_dist, name = 'monoConstrint')
+                mono_reg = 10.0 * tf.reduce_mean(tf.square(tf.nn.relu(-jacobian)))
+                regularizer = mono_reg
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
