@@ -242,6 +242,33 @@ config_dict = {
         },
         'stages': [[0, 0]]
     },
+    'ultraShallow_512d_mono': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 2,
+            'particles_count' : [vSize, 32],
+            'conv_count' : [2, 0],
+            'res_count' : [0, 1],
+            'kernel_size' : [k, k],
+            'bik' : [0, 128],
+            'channels' : [1, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'mono' : True
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'concat',
+        },
+        'stages': [[0, 0]]
+    },
     'ultraShallow_fS': {
         'useVector': False,
         'encoder': {
@@ -539,4 +566,4 @@ config_dict = {
     },
 }
 
-config = config_dict['regular_512d_mono']
+config = config_dict['ultraShallow_512d_mono']
