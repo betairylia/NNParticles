@@ -682,7 +682,7 @@ class model_particles:
 
             # regularizer = regularizer / blocks
             if monotonic:
-                jacobian = tf.gradients(pos, uniform_dist, name = 'monoConstrint')
+                jacobian = tf.stack(tf.gradients(pos, uniform_dist, name = 'monoConstrint'))
                 mono_reg = 10.0 * tf.reduce_mean(tf.square(tf.nn.relu(-jacobian)))
                 regularizer = mono_reg
 
