@@ -254,7 +254,7 @@ config_dict = {
             'channels' : [1, max(ld, hd * 2)],
         },
         'decoder': {
-            'mono' : True
+            'mono' : True,
             'blocks' : 1,
             'pcnt' : [vSize], # particle count
             'generator' : [6], # Generator depth

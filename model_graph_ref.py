@@ -569,12 +569,14 @@ class model_particles:
                     if generator_struct == 'concat':
                         # generator
                         # int_meta = tf.broadcast_to(tf.reshape(int_meta, [self.batch_size, coarse_cnt, 1, -1]), [self.batch_size, coarse_cnt, n_per_cluster, 1])
-                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        # z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, 3], minval = -0.5, maxval = 0.5, dtype = default_dtype)
                         uniform_dist = z
                         fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
                         z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
                         
-                        n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
+                        # n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
+                        n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] + 3])
                         
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
