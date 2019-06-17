@@ -257,7 +257,7 @@ config_dict = {
             'mono' : True,
             'blocks' : 1,
             'pcnt' : [vSize], # particle count
-            'generator' : [6], # Generator depth
+            'generator' : [5], # Generator depth
             'maxLen' : [None],
             'nConv' : [0],
             'nRes' : [0],

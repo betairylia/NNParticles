@@ -344,7 +344,7 @@ def autofc_mono(inputs, outDim, mono = -1, sign = 1, act = None, bias = True, na
 
     with tf.variable_scope(name):
         
-        mono_w = tf.get_variable('mono_W', shape = [mono, outDim], dtype = default_dtype)
+        mono_w = tf.get_variable('mono_W', shape = [mono, outDim], dtype = default_dtype, initializer = tf.initializers.random_normal(mean = -4.5, stddev = 1.0)) # 0.004 ~ 0.03
         exp_mono_w = tf.exp(sign * mono_w)
 
         w = exp_mono_w
@@ -628,7 +628,12 @@ class model_particles:
                         
                         if genFeatures:
                             nf = autofc(n, hdim[bi], name = 'gen_feature_out')
-                        n = autofc(n, pos_range, name = 'gen_out')
+                        
+                        if monotonic:
+                            n = autofc_mono(n, pos_range, name = 'mono_gen_out')
+                        else:
+                            n = autofc(n, pos_range, name = 'gen_out')
+
                         n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
                     
                     elif generator_struct == 'final_selection':
@@ -662,7 +667,9 @@ class model_particles:
                                     z = autofc_mono(z, gen_hdim[bi], name = 'mono_fc')
                                 else:
                                     z = autofc(z, gen_hdim[bi], name = 'fc')
-                                z = self.act(z)
+
+                                if gi < (generator[bi] - 1):
+                                    z = self.act(z)
                         # Collect features
                         z = tf.multiply(w, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi], 1]))
                         z = tf.reduce_sum(z, axis = 3) # z <- [bs, coarse_cnt, n_per_cluster, pos_range]
