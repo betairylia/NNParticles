@@ -333,6 +333,42 @@ def autofc(inputs, outDim, act = None, bias = True, name = 'fc', forceSN = False
         if act is not None:
             x = act(x)
         return x
+
+def autofc_mono(inputs, outDim, mono = -1, sign = 1, act = None, bias = True, name = 'mfc', forceSN = False):
+    
+    input_shape = inputs.shape.as_list()
+    inputs = tf.reshape(inputs, [-1, input_shape[-1]])
+
+    if mono == -1:
+        mono = input_shape[-1]
+
+    with tf.variable_scope(name):
+        
+        mono_w = tf.get_variable('mono_W', shape = [mono, outDim], dtype = default_dtype)
+        exp_mono_w = tf.exp(sign * mono_w)
+
+        w = exp_mono_w
+
+        if mono < input_shape[-1]:
+            nonmono_w = tf.get_variable('W', shape = [input_shape[-1] - mono, outDim], dtype = default_dtype)
+            w = tf.concat([w, nonmono_w], axis = 0)
+
+        if SN or forceSN:
+            x = tf.matmul(inputs, spectral_norm(w))
+        else:
+            x = tf.matmul(inputs, w)
+
+        if bias == True:
+            b = tf.get_variable('b', shape = [outDim], dtype = default_dtype)
+            x = tf.nn.bias_add(x, b)
+        
+        x_shape = input_shape
+        x_shape[-1] = outDim
+        x = tf.reshape(x, x_shape)
+
+        if act is not None:
+            x = act(x)
+        return x
         
 # TODO: position re-fine layer
 
@@ -569,18 +605,24 @@ class model_particles:
                     if generator_struct == 'concat':
                         # generator
                         # int_meta = tf.broadcast_to(tf.reshape(int_meta, [self.batch_size, coarse_cnt, 1, -1]), [self.batch_size, coarse_cnt, n_per_cluster, 1])
-                        # z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
-                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, 3], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        # z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, 3], minval = -0.5, maxval = 0.5, dtype = default_dtype)
                         uniform_dist = z
                         fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
                         z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
                         
-                        # n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
-                        n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] + 3])
+                        n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
+                        # n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] + 3])
                         
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
-                                n = autofc(n, gen_hdim[bi], name = 'fc')
+                                if monotonic:
+                                    mono_cnt = -1
+                                    if gi == 0:
+                                        mono_cnt = fdim[bi]
+                                    n = autofc_mono(n, gen_hdim[bi], mono = mono_cnt, name = 'mono_fc')
+                                else:
+                                    n = autofc(n, gen_hdim[bi], name = 'fc')
                                 # n = norm(n, 0.999, is_train, name = 'norm')
                                 n = self.act(n)
                         
@@ -602,11 +644,12 @@ class model_particles:
 
                             w = autofc(l, pos_range * fdim[bi] , name = 'mlp/w')
                             b = autofc(l, pos_range            , name = 'mlp/b')
-                            t = autofc(l, pos_range * pos_range, name = 'mlp/t')
 
                             w = tf.reshape(w, [self.batch_size, coarse_cnt, 1,  fdim[bi], pos_range])
-                            w = tf.nn.softmax(w, axis = 3)
-                            t = tf.reshape(t, [self.batch_size, coarse_cnt, 1, pos_range, pos_range])
+                            # w = tf.nn.softmax(w, axis = 3)
+                            if monotonic:
+                                w = tf.exp(w) # monotonic
+                            # t = tf.reshape(t, [self.batch_size, coarse_cnt, 1, pos_range, pos_range])
                             b = tf.reshape(b, [self.batch_size, coarse_cnt, 1, pos_range])
 
                         z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
@@ -615,7 +658,10 @@ class model_particles:
                         # Regular generator
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
-                                z = autofc(z, gen_hdim[bi], name = 'fc')
+                                if monotonic:
+                                    z = autofc_mono(z, gen_hdim[bi], name = 'mono_fc')
+                                else:
+                                    z = autofc(z, gen_hdim[bi], name = 'fc')
                                 z = self.act(z)
                         # Collect features
                         z = tf.multiply(w, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi], 1]))
@@ -623,8 +669,8 @@ class model_particles:
                         z = z + b
 
                         # Linear transformation
-                        z = tf.multiply(t, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, pos_range, 1]))
-                        z = tf.reduce_sum(z, axis = 3)
+                        # z = tf.multiply(t, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, pos_range, 1]))
+                        # z = tf.reduce_sum(z, axis = 3)
 
                         n = z
 
@@ -683,10 +729,10 @@ class model_particles:
                 final_particles = tf.concat([pos, n], -1)
 
             # regularizer = regularizer / blocks
-            if monotonic:
-                jacobian = tf.stack(tf.gradients(pos, uniform_dist, name = 'monoConstrint'))
-                mono_reg = 10.0 * tf.reduce_mean(tf.square(tf.nn.relu(-jacobian)))
-                regularizer = mono_reg
+            # if monotonic:
+            #     jacobian = tf.stack(tf.gradients(pos, uniform_dist, name = 'monoConstrint'))
+            #     mono_reg = 10.0 * tf.reduce_mean(tf.square(tf.nn.relu(-jacobian)))
+            #     regularizer = mono_reg
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
