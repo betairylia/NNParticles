@@ -334,6 +334,14 @@ def autofc(inputs, outDim, act = None, bias = True, name = 'fc', forceSN = False
             x = act(x)
         return x
 
+def lr_mult(alpha):
+    @tf.custom_gradient
+    def _lr_mult(x):
+        def grad(dy):
+            return dy * alpha * tf.ones_like(x)
+        return x, grad
+    return _lr_mult
+
 def autofc_mono(inputs, outDim, mono = -1, sign = 1, act = None, bias = True, name = 'mfc', forceSN = False):
     
     input_shape = inputs.shape.as_list()
@@ -344,10 +352,12 @@ def autofc_mono(inputs, outDim, mono = -1, sign = 1, act = None, bias = True, na
 
     with tf.variable_scope(name):
         
-        mono_w = tf.get_variable('mono_W', shape = [mono, outDim], dtype = default_dtype, initializer = tf.initializers.random_normal(mean = -4.5, stddev = 1.0)) # 0.004 ~ 0.03
-        exp_mono_w = tf.exp(sign * mono_w)
+        mono_w = tf.get_variable('mono_W', shape = [mono, outDim], dtype = default_dtype, initializer = tf.initializers.random_normal(mean = -10.0, stddev = 2.0)) # 0.004 ~ 0.03
+        exp_mono_w = 10.0 * tf.exp(lr_mult(24.0)(mono_w))
 
+        # w = mono_w
         w = exp_mono_w
+        tf.summary.histogram('exp_weights', w)
 
         if mono < input_shape[-1]:
             nonmono_w = tf.get_variable('W', shape = [input_shape[-1] - mono, outDim], dtype = default_dtype)
@@ -611,6 +621,7 @@ class model_particles:
                         fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
                         z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
                         
+                        # n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi]])
                         n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
                         # n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] + 3])
                         
@@ -620,6 +631,7 @@ class model_particles:
                                     mono_cnt = -1
                                     if gi == 0:
                                         mono_cnt = fdim[bi]
+                                        pass
                                     n = autofc_mono(n, gen_hdim[bi], mono = mono_cnt, name = 'mono_fc')
                                 else:
                                     n = autofc(n, gen_hdim[bi], name = 'fc')

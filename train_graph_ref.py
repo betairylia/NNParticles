@@ -155,7 +155,7 @@ merged_train = [tf.summary.merge([ptraps[i]]) for i in range(model.stages)]
 # print("merged model val: " + str(merged_model_val))
 merged_val = tf.summary.merge([vals])
 # merged_mesh = tf.summary.merge([pc_rec, pc_gt])
-# merged_train = tf.summary.merge_all()
+merged_val = tf.summary.merge_all()
 
 # Create session
 config = tf.ConfigProto()
@@ -256,7 +256,7 @@ while True:
         
         feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
         
-        if batch_idx_test % 200 == 0:
+        if batch_idx_test % 100 == 0:
             if model.edge_sample is not None:
                 n_loss, summary, _rec, _gt, esamp = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :], model.edge_sample[0]], feed_dict = feed_dict)
             else:
