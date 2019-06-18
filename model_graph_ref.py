@@ -54,6 +54,15 @@ def norm(inputs, decay, is_train, name):
             return tf.contrib.layers.instance_norm(inputs, epsilon = 1e-3, scope = name)
     # return tf.contrib.layers.group_norm(inputs, 
 
+def AdaIN(inputs, mean, std, axes = [2], name = 'AdaIN', epsilon = 1e-5):
+
+    with tf.variable_scope(name):
+
+        c_mean, c_var = tf.nn.moments(inputs, axes = axes, keepdims = True)
+        c_std = tf.sqrt(c_var + epsilon)
+
+        return std * (inputs - c_mean) / c_std + mean
+
 # TODO: use Spec norm
 def spectral_norm(w, iteration=1):
     w_shape = w.shape.as_list()
@@ -636,6 +645,43 @@ class model_particles:
                                 else:
                                     n = autofc(n, gen_hdim[bi], name = 'fc')
                                 # n = norm(n, 0.999, is_train, name = 'norm')
+                                n = self.act(n)
+                        
+                        if genFeatures:
+                            nf = autofc(n, hdim[bi], name = 'gen_feature_out')
+                        
+                        if monotonic:
+                            n = autofc_mono(n, pos_range, name = 'mono_gen_out')
+                        else:
+                            n = autofc(n, pos_range, name = 'gen_out')
+
+                        n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+
+                    elif generator_struct == 'AdaIN':
+                        
+                        # generator
+                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        uniform_dist = z
+                        
+                        for gi in range(generator[bi]):
+                            with tf.variable_scope('gen%d' % gi):
+                                if monotonic:
+                                    mono_cnt = -1
+                                    if gi == 0:
+                                        mono_cnt = fdim[bi]
+                                        pass
+                                    n = autofc_mono(n, gen_hdim[bi], mono = mono_cnt, name = 'mono_fc')
+                                else:
+                                    n = autofc(n, gen_hdim[bi], name = 'fc')
+                                
+                                s_mean = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_mean')
+                                s_std  = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_std')
+
+                                s_mean = tf.reshape(s_mean, [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
+                                s_std  = tf.reshape(s_std,  [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
+
+                                n = AdaIn(n, s_mean, s_std)
+
                                 n = self.act(n)
                         
                         if genFeatures:

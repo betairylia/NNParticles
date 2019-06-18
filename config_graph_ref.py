@@ -85,6 +85,32 @@ config_dict = {
         },
         'stages': [[0, 0]]
     },
+    'regular_512d_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [vSize, 1280, 512, max(256, ccnt * 2), 32],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 1, 6],
+            'kernel_size' : [k, k, k, k, k],
+            'bik' : [0, 32, 32, 48, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
+        },
+        'stages': [[0, 0]]
+    },
     'regular_512d_mono': {
         'useVector': False,
         'encoder': {
@@ -265,6 +291,32 @@ config_dict = {
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
             'genStruct' : 'concat',
+        },
+        'stages': [[0, 0]]
+    },
+    'ultraShallow_512d_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 2,
+            'particles_count' : [vSize, 32],
+            'conv_count' : [2, 0],
+            'res_count' : [0, 1],
+            'kernel_size' : [k, k],
+            'bik' : [0, 128],
+            'channels' : [1, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [vSize], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
         },
         'stages': [[0, 0]]
     },
@@ -619,4 +671,4 @@ config_dict = {
     },
 }
 
-config = config_dict['ultraShallow_512d_mono']
+config = config_dict['ultraShallow_512d_AdaIN']
