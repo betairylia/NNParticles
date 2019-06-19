@@ -671,4 +671,4 @@ config_dict = {
     },
 }
 
-config = config_dict['ultraShallow_512d_AdaIN']
+config = config_dict['regular_512d_AdaIN']

@@ -58,7 +58,7 @@ def AdaIN(inputs, mean, std, axes = [2], name = 'AdaIN', epsilon = 1e-5):
 
     with tf.variable_scope(name):
 
-        c_mean, c_var = tf.nn.moments(inputs, axes = axes, keepdims = True)
+        c_mean, c_var = tf.nn.moments(inputs, axes = axes, keep_dims = True)
         c_std = tf.sqrt(c_var + epsilon)
 
         return std * (inputs - c_mean) / c_std + mean
@@ -662,7 +662,9 @@ class model_particles:
                         # generator
                         z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
                         uniform_dist = z
-                        
+                       
+                        n = z
+
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
                                 if monotonic:
@@ -680,7 +682,7 @@ class model_particles:
                                 s_mean = tf.reshape(s_mean, [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
                                 s_std  = tf.reshape(s_std,  [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
 
-                                n = AdaIn(n, s_mean, s_std)
+                                n = AdaIN(n, s_mean, s_std)
 
                                 n = self.act(n)
                         
