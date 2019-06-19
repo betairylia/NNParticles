@@ -112,8 +112,12 @@ logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss
 # Create the model
 ph_X = tf.placeholder(tf.float32, [args.batch_size, 5120, 4])
 normalized_X = ph_X[:, :, 0:3] / args.normalize
-train_rec, train_ep = model_net.get_model(ph_X, True, 0.98)
-val_rec, val_ep = model_net.get_model(ph_X, False, 0.98)
+
+with tf.variable_scope('net', reuse = False):
+    train_rec, train_ep = model_net.get_model(ph_X, True, 0.98)
+with tf.variable_scope('net', reuse = True):
+    val_rec, val_ep = model_net.get_model(ph_X, False, 0.98)
+
 train_loss = model_net.get_loss(train_rec, normalized_X, train_ep)
 val_loss = model_net.get_loss(val_rec, normalized_X, val_ep)
 optimizer = tf.tf.train.AdamOptimizer(learning_rate = args.learning_rate, beta1 = args.beta1, beta2 = args.beta2, epsilon=1e-8)
