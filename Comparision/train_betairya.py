@@ -123,6 +123,9 @@ val_loss, val_ep = model_net.get_loss(val_rec, normalized_X, val_ep)
 optimizer = tf.train.AdamOptimizer(learning_rate = args.learning_rate, beta1 = args.beta1, beta2 = args.beta2, epsilon=1e-8)
 train_op = optimizer.minimize(train_loss)
 
+train_loss /= 100.0
+val_loss /= 100.0
+
 val_rec_out = val_rec * args.normalize
 
 # Summary the variables
