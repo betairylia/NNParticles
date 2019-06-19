@@ -110,7 +110,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss", gmtime()) + ")/")
 
 # Create the model
-ph_X = tf.placeholder(default_dtype, [args.batch_size, 5120, 4])
+ph_X = tf.placeholder(tf.float32, [args.batch_size, 5120, 4])
 normalized_X = ph_X[:, :, 0:3] / args.normalize
 train_rec, train_ep = model_net.get_model(ph_X, True, 0.98)
 val_rec, val_ep = model_net.get_model(ph_X, False, 0.98)
