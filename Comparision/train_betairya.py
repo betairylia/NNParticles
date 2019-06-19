@@ -118,8 +118,8 @@ with tf.variable_scope('net', reuse = False):
 with tf.variable_scope('net', reuse = True):
     val_rec, val_ep = model_net.get_model(ph_X, False, 0.98)
 
-train_loss = model_net.get_loss(train_rec, normalized_X, train_ep)
-val_loss = model_net.get_loss(val_rec, normalized_X, val_ep)
+train_loss, train_ep = model_net.get_loss(train_rec, normalized_X, train_ep)
+val_loss, val_ep = model_net.get_loss(val_rec, normalized_X, val_ep)
 optimizer = tf.train.AdamOptimizer(learning_rate = args.learning_rate, beta1 = args.beta1, beta2 = args.beta2, epsilon=1e-8)
 train_op = optimizer.minimize(train_loss)
 
