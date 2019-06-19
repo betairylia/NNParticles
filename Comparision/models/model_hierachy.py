@@ -14,8 +14,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 import tf_util
-sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/nn_distance'))
-import tf_nndistance
+# sys.path.append(os.path.join(ROOT_DIR, 'tf_ops/nn_distance'))
+# import tf_nndistance
 
 sys.path.append(os.path.join(ROOT_DIR, '../'))
 import model_graph_ref
