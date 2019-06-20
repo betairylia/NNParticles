@@ -19,7 +19,7 @@ import tf_util
 
 sys.path.append(os.path.join(ROOT_DIR, '../'))
 import model_graph_ref
-model_graph = model_graph_ref.model_particles(5120, 512, 4, None, 3)
+model_graph = model_graph_ref.model_particles(2048, 512, 4, None, 3)
 
 def placeholder_inputs(batch_size, num_point):
     pointclouds_pl = tf.placeholder(tf.float32, shape=(batch_size, num_point, 3))
@@ -107,7 +107,7 @@ def get_loss(pred, label, end_points):
     tf.summary.scalar('pc1loss', pc1_loss)
     loss = pc_loss + 0.1*pc1_loss
 
-    return loss*100, end_points
+    return loss, end_points
 
 
 if __name__=='__main__':

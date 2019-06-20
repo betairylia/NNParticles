@@ -433,8 +433,8 @@ class model_particles:
 
     def build_network(self, is_train, reuse, loopSim = True, includeSim = True):
 
-        normalized_X = self.ph_X / self.normalize
-        
+        normalized_X = (self.ph_X[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
+         
         # Mixed FP16 & FP32
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
 
@@ -444,6 +444,8 @@ class model_particles:
             rec = self.particleDecoder(l, self.gridMaxSize, outDim, is_train = is_train, reuse = reuse)
 
             loss = self.chamfer_metric(rec, rec, normalized_X[:, :, 0:outDim], 3, tf.square, EMD = True) # Keep use L2 for validation loss.
+            
+            rec = rec * tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
 
         return rec, normalized_X[:, :, 0:outDim], loss
 

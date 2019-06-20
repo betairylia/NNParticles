@@ -1,5 +1,5 @@
 """ TF model for point cloud autoencoder. PointNet encoder, FC and UPCONV decoder.
-Using GPU Chamfer's distance loss. Required to have 5120 points.
+Using GPU Chamfer's distance loss. Required to have 2048 points.
 
 Modified by: betairylia, June 2019
 Author: Charles R. Qi
@@ -19,7 +19,7 @@ import tf_util
 
 sys.path.append(os.path.join(ROOT_DIR, '../'))
 import model_graph_ref
-model_graph = model_graph_ref.model_particles(5120, 512, 4, None, 3)
+model_graph = model_graph_ref.model_particles(2048, 512, 4, None, 3)
 
 def placeholder_inputs(batch_size, num_point):
     pointclouds_pl = tf.placeholder(tf.float32, shape=(batch_size, num_point, 3))
@@ -39,7 +39,7 @@ def get_model(point_cloud, is_training, bn_decay=None):
     """
     batch_size = point_cloud.get_shape()[0].value
     num_point = point_cloud.get_shape()[1].value
-    assert(num_point==5120)
+    assert(num_point==2048)
     point_dim = point_cloud.get_shape()[2].value
     end_points = {}
 
@@ -86,15 +86,15 @@ def get_model(point_cloud, is_training, bn_decay=None):
     net = tf_util.conv2d_transpose(net, 256, kernel_size=[3,3], stride=[1,1], padding='VALID', scope='upconv2', bn=True, bn_decay=bn_decay, is_training=is_training)    # 4 x 4 = 16
     net = tf_util.conv2d_transpose(net, 256, kernel_size=[4,4], stride=[2,2], padding='VALID', scope='upconv3', bn=True, bn_decay=bn_decay, is_training=is_training)    # 10x10 = 100
     net = tf_util.conv2d_transpose(net, 128, kernel_size=[5,5], stride=[3,3], padding='VALID', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)    # 32x32 = 1024
-    net = tf_util.conv2d_transpose(net, 80,  kernel_size=[5,5], stride=[2,2], padding= 'SAME', scope='upconv4', bn=True, bn_decay=bn_decay, is_training=is_training)    # 64x64 = 4096
-    net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv5', activation_fn=None)
+    # net = tf_util.conv2d_transpose(net, 80,  kernel_size=[5,5], stride=[2,2], padding= 'SAME', scope='upconv5', bn=True, bn_decay=bn_decay, is_training=is_training)    # 64x64 = 4096
+    net = tf_util.conv2d_transpose(net, 3, kernel_size=[1,1], stride=[1,1], padding='VALID', scope='upconv6', activation_fn=None)
     end_points['xyzmap'] = net
     pc_upconv = tf.reshape(net, [batch_size, -1, 3])
 
     # Set union
     net = tf.concat(values=[pc_fc,pc_upconv], axis=1)
 
-    assert(net.get_shape()[1].value == 5120)
+    assert(net.get_shape()[1].value == 2048)
 
     return net, end_points
 
@@ -105,7 +105,7 @@ def get_loss(pred, label, end_points):
     # loss = tf.reduce_mean(dists_forward+dists_backward)
     loss = model_graph.chamfer_metric(pred, pred, label, 3, tf.square, EMD = True)
     end_points['pcloss'] = loss
-    return loss*100, end_points
+    return loss, end_points
 
 
 if __name__=='__main__':

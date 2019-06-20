@@ -2,8 +2,8 @@
 vSize = 5120
 # ccnt = 64
 # cdim = 32
-ccnt = 256
-cdim = 16
+ccnt = 1280
+cdim = 4
 hd = 64
 ld = 128
 k = 16
@@ -108,16 +108,16 @@ config_dict = {
         'encoder': {
             'blocks' : 2,
             'particles_count' : [vSize, ccnt],
-            'conv_count' : [0, 0],
+            'conv_count' : [1, 0],
             'res_count' : [0, 0],
             'kernel_size' : [k, k],
-            'bik' : [0, 128],
-            'channels' : [1, max(ld, hd * 2)],
+            'bik' : [0, 16],
+            'channels' : [1, 16],
         },
         'decoder': {
             'blocks' : 1,
             'pcnt' : [vSize], # particle count
-            'generator' : [4], # Generator depth
+            'generator' : [3], # Generator depth
             'maxLen' : [None],
             'nConv' : [0],
             'nRes' : [0],
@@ -130,10 +130,10 @@ config_dict = {
         },
         'simulator': {
             'knnk': k,
-            'layers': [256],
+            'layers': [16],
         },
         'stages': [[0, 0]]
     },
 }
 
-config = config_dict['shallow']
+config = config_dict['ultraShallow']

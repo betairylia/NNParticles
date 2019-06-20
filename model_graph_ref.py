@@ -176,9 +176,11 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         for i in range(len(mlp)):
             n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i)
             n = norm(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
-            n = tf.nn.elu(n)
+            n = tf.nn.leaky_relu(n)
+            # n = tf.nn.elu(n)
 
         n = autofc(n, channels * fCh, None, name = 'kernel/mlp_out')
+    
         # n = autofc(n, channels * fCh, tf.nn.tanh, name = 'kernel/mlp_out')
 
         # print(summary_scope)
@@ -188,6 +190,13 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         
         cW = tf.reshape(n, [bs, N, k, channels, fCh])
         
+        # normalize it to be a true "PDF"
+        normalize_factor = tf.reduce_mean(tf.abs(cW), axis = [0, 1, 2], keepdims = True)
+        cW = cW / (normalize_factor + 1e-5)
+        
+        scaling = tf.get_variable('cW_scale', shape = [1, 1, 1, channels, fCh], dtype = default_dtype)
+        cW = scaling * cW
+
         # Batch matmul won't work for more than 65535 matrices ???
         # n = tf.matmul(n, tf.reshape(neighbors, [bs, Nx, k, Cy, 1]))
         # Fallback solution
@@ -204,6 +213,7 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
 
         b = tf.get_variable('b_out', dtype = default_dtype, shape = [channels], initializer = b_init, trainable = True)
         n = tf.reduce_mean(n, axis = 2)
+        # n = tf.reduce_max(n, axis = 2)
         n = tf.nn.bias_add(n, b)
         
         if act is not None:
@@ -282,9 +292,9 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
     
     with tf.variable_scope(name):
         
-        fCh = 6
+        fCh = 2
         if filters >= 256: 
-            fCh = 4
+            fCh = 2
 
         if mlp == None:
             # mlp = [filters * 2, filters * 2]
@@ -310,6 +320,7 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
             with tf.variable_scope('res%d' % r):
                 for c in range(num_conv):
                     nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp)
+            
             n = n + nn
         
         if num_res > 1:
@@ -417,9 +428,11 @@ class model_particles:
         self.outDim = outDim
 
         # self.act = (lambda x: 0.8518565165255 * tf.exp(-2 * tf.pow(x, 2)) - 1) # normalization constant c = (sqrt(2)*pi^(3/2)) / 3, 0.8518565165255 = c * sqrt(5).
-        self.act = tf.nn.elu
-        self.convact = tf.nn.elu
+        # self.act = tf.nn.elu
+        # self.convact = tf.nn.elu
         # self.act = tf.nn.relu
+        self.act = tf.nn.leaky_relu
+        self.convact = tf.nn.leaky_relu
 
         self.encoder_arch = 'plain' # plain, plain_noNorm, plain_shallow, attractor, attractor_attention, attractor_affine
         self.decoder_arch = 'plain' # plain, advanced_score, distribution_weight, distribution_conditional, attractor
@@ -473,7 +486,10 @@ class model_particles:
                 bik = kernel_size
             
             gPos = input_particle[:, :, :3]
-            n = input_particle[:, :, self.outDim:] # Ignore velocity
+            if 3 >= self.outDim:
+                n = tf.ones_like(input_particle[:, :, :3])
+            else:
+                n = input_particle[:, :, 3:self.outDim]
             var_list = []
             pool_pos = []
             pool_eval_func = []
@@ -509,11 +525,14 @@ class model_particles:
                         n = gconv(prev_n, bpIdx, bpEdg, channels[i], self.act, True, is_train, 'gpool/gconv', w_init, b_init)
 
                     if i == 1:
-                        edg_sample = bpEdg[..., 0:3] + tf.random.uniform([self.batch_size, particles_count[i], 1, 3], minval = -24., maxval = 24.)
+                        edg_sample = bpEdg[..., 0:3] # + tf.random.uniform([self.batch_size, particles_count[i], 1, 3], minval = -24., maxval = 24.)
                         edg_sample = tf.reshape(edg_sample, [-1, 3])
                         edg_sample = [edg_sample, [self.batch_size * particles_count[i]]]
 
                     gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen')
+
+                    if i == 0:
+                        n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init)
 
                     n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init)
                     n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init)
@@ -683,6 +702,7 @@ class model_particles:
                                 s_std  = tf.reshape(s_std,  [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
 
                                 n = AdaIN(n, s_mean, s_std)
+                                # n = AdaIN(n, s_mean, s_std, axes = [0, 1, 2])
 
                                 n = self.act(n)
                         
@@ -748,14 +768,15 @@ class model_particles:
                         n_ref = norm_tun(n_ref, maxLen[bi])
 
                     # regularizer to keep in local space
-                    regularizer += 0.0 * tf.reduce_mean(tf.norm(n, axis = -1))
+                    regularizer += 0.02 * tf.reduce_mean(tf.norm(n, axis = -1))
 
                     # Back to world space
                     n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
                     n_ref = n_ref + tf.reshape(coarse_pos_ref, [self.batch_size, coarse_cnt, 1, pos_range])
-                    
+
                     ap = tf.reshape(n, [self.batch_size, pcnt[bi], pos_range])
                     ap_ref = tf.reshape(n_ref, [self.batch_size, pcnt[bi], pos_range])
+                    nf = tf.reshape(nf, [self.batch_size, pcnt[bi], -1])
 
                     # General operations for full generators
                     gen_only.append(ap)
@@ -774,8 +795,9 @@ class model_particles:
                         _, _, gp_idx, gp_edg = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bipggen')
                         n = gconv(coarse_fea, gp_idx, gp_edg, hdim[bi], self.act, True, is_train, 'convt', w_init, b_init)
 
-                    _, gidx, gedg = kNNG_gen(pos, knnk[bi], 3, name = 'ggen')
-                    n = convRes(n, gidx, gedg, nConv[bi], nRes[bi], hdim[bi], self.act, True, is_train, 'resblock', w_init, b_init)
+                    if nConv[bi] > 0:
+                        _, gidx, gedg = kNNG_gen(pos, knnk[bi], 3, name = 'ggen')
+                        n = convRes(n, gidx, gedg, nConv[bi], nRes[bi], hdim[bi], self.act, True, is_train, 'resblock', w_init, b_init)
 
                     coarse_pos = pos
                     coarse_fea = n
@@ -811,9 +833,9 @@ class model_particles:
             Np = particles.shape[1]
             Ng = groundtruth.shape[1]
             
-            match = approx_match(groundtruth, particles_ref) # [bs, Np, Ng]
-            row_predicted = tf.reshape(  particles[:, :, 0:pos_range], [bs, Np, 1, pos_range])
-            col_groundtru = tf.reshape(groundtruth[:, :, 0:pos_range], [bs, 1, Ng, pos_range])
+            match = approx_match(groundtruth[:, :, 0:3], particles_ref[:, :, 0:3]) # [bs, Np, Ng]
+            row_predicted = tf.reshape(  particles[:, :, :], [bs, Np, 1, -1])
+            col_groundtru = tf.reshape(groundtruth[:, :, :], [bs, 1, Ng, -1])
             distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
             distance = distance * match
             distance_loss = tf.reduce_mean(tf.reduce_sum(distance, axis = -1))
@@ -871,7 +893,7 @@ class model_particles:
 
     def build_network(self, is_train, reuse, loopSim = True, includeSim = True):
 
-        normalized_X = self.ph_X / self.normalize
+        normalized_X = (self.ph_X[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
 
         pos = []
         fea = []
@@ -899,9 +921,6 @@ class model_particles:
                     outDim = self.outDim
                     _, [rec_X, rec_X_ref, fold_X], _, r, _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, begin_block = self.stages[i][1], is_train = is_train, reuse = True)
                     
-                    pos.append(posX)
-                    fea.append(feaX)
-                    rec.append(rec_X)
                     vs = []
                     
                     # Variable for encoders
@@ -923,6 +942,12 @@ class model_particles:
 
                     recLoss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
                     recLoss += r
+
+                    rec_X = rec_X * tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
+                    
+                    pos.append(posX)
+                    fea.append(feaX)
+                    rec.append(rec_X)
                     loss.append(recLoss)
             else:
                 rec = rec_X
@@ -931,7 +956,9 @@ class model_particles:
                 pos = posX
                 fea = feaX
 
-        return rec, normalized_X[:, :, 0:outDim], loss, vls, meta, esamp
+                rec = rec * tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
+
+        return rec, self.ph_X[:, :, 0:outDim], loss, vls, meta, esamp
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):

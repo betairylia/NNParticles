@@ -268,7 +268,7 @@ while True:
 
         print(colored("(val =%7.4f)" % n_loss, 'blue'))
 
-        if batch_idx_train % (4000 // args.batch_size) == 0:
+        if batch_idx_train % (2000 // args.batch_size) == 0:
             sav = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
             print("Checkpoint saved in %s" % (sav))
 

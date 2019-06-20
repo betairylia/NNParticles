@@ -17,11 +17,16 @@ def get_fileNames(main_dir):
     
     files = []
     val = None
+    norm = {}
 
     for filename in os.listdir(main_dir):
         if filename.split('.')[-1] == 'npy':
             if filename == 'val.npy':
                 val = os.path.join(main_dir, filename)
+            elif filename == 'mean.npy':
+                norm['mean'] = np.load(os.path.join(main_dir, filename)).astype(np.float32)
+            elif filename == 'stddev.npy':
+                norm['std'] = np.load(os.path.join(main_dir, filename)).astype(np.float32)
             else:
                 files.append(os.path.join(main_dir, filename))
     
@@ -33,14 +38,14 @@ def get_fileNames(main_dir):
         files.append(val)
         val = None
 
-    return files, val
+    return files, val, norm
 
 def fileCount(path):
     return len(get_fileNames(path))
 
 def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
      
-    assert content['gridSize'] == maxParticlesPerGrid
+    assert content['gridSize'] == maxParticlesPerGrid or print("content - %s (%s); vSize - %d" % (str(content['gridSize']), str(content['data'].shape), maxParticlesPerGrid))
 
     batch_X = np.zeros((batch_size, maxParticlesPerGrid, content['dim'] + 1))
     batch_Y = np.zeros((batch_size, maxParticlesPerGrid, content['dim'] + 1))
@@ -66,6 +71,11 @@ def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
         for step in steps:
             
             if noSim == False:
+                
+                # print("NoSim == False <!>")
+                # print("Content['data']: %s" % str(content['data'].shape))
+                # print("Slice: %s" % str(content['data'][step, 0, :, 0:content['dim']].shape))
+
                 batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, 0, :, 0:content['dim']]
                 batch_Y[batch_idx, :, 0:content['dim']] = content['data'][step, 1, :, 0:content['dim']]
                 batch_L[batch_idx, :, 0:content['dim']] = content['data'][step, 2, :, 0:content['dim']]
@@ -83,6 +93,9 @@ def gen_batch(content, batch_size, vM, is_Train = True, shuffle = True):
                 avgCard += batch_X_size[batch_idx]
 
             else:
+                # print("Content['data']: %s" % str(content['data'].shape))
+                # print("Slice: %s" % str(content['data'][step, :, 0:content['dim']].shape))
+
                 batch_X[batch_idx, :, 0:content['dim']] = content['data'][step, :, 0:content['dim']]
                 batch_X[batch_idx, :, 3:content['dim']] *= vM
                 batch_X[batch_idx, :, content['dim']] = 1
@@ -172,7 +185,7 @@ def gen_batch_predict(content, batch_size, currentStep, step_count):
 
 def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True, dim = 0):
 
-    files, val = get_fileNames(path)
+    files, val, norm = get_fileNames(path)
     # for i in range(len(files)):
     #     read_file(files[i])
 
@@ -181,10 +194,30 @@ def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True, dim = 0):
     print('*=*=*')
     print('Validation set:')
     print(val)
+    print('*=*=*')
+    print('Normalization descriptor:')
+    print(norm)
 
     if val is not None:
         print("Loading validation set...")
         data_val = np.load(val)
+        if (data_val.shape[1] if data_val.ndim == 3 else data_val.shape[2]) >= maxParticlesPerGrid:
+            if data_val.ndim == 3:
+                data_new = np.zeros((data_val.shape[0], maxParticlesPerGrid, data_val.shape[2]))
+            else:
+                data_new = np.zeros((data_val.shape[0], data_val.shape[1], maxParticlesPerGrid, data_val.shape[3]))
+
+            for i in range(data_val.shape[0]):
+                if data_val.ndim == 3:
+                    data_new[i] = np.random.permutation(data_val[i])[:maxParticlesPerGrid]
+                else:
+                    for j in range(data_val.shape[1]):
+                        data_new[i, j] = np.random.permutation(data_val[i, j])[:maxParticlesPerGrid]
+
+            del data_val
+            data_val = data_new
+            del data_new
+
         if data_val.ndim == 3:
             content_val = {'data': data_val, 'stepCount': data_val.shape[0], 'gridSize': data_val.shape[1], 'dim': data_val.shape[2]}
         else:
@@ -197,6 +230,23 @@ def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True, dim = 0):
     # for i in range(n_epochs * len(files)):
         print("Reading data...")
         data = np.load(files[i % len(files)]) # [step, 3, gridCount, 6(channels)]
+        if (data.shape[1] if data.ndim == 3 else data.shape[2]) >= maxParticlesPerGrid:
+            if data.ndim == 3:
+                data_new = np.zeros((data.shape[0], maxParticlesPerGrid, data.shape[2]))
+            else:
+                data_new = np.zeros((data.shape[0], data.shape[1], maxParticlesPerGrid, data.shape[3]))
+            
+            for i in range(data.shape[0]):
+                if data.ndim == 3:
+                    data_new[i] = np.random.permutation(data[i])[:maxParticlesPerGrid]
+                else:
+                    for j in range(data.shape[1]):
+                        data_new[i, j] = np.random.permutation(data[i, j])[:maxParticlesPerGrid]
+
+            del data
+            data = data_new
+            del data_new
+
         if data.ndim == 3:
             content = {'data': data, 'stepCount': data.shape[0], 'gridSize': data.shape[1], 'dim': data.shape[2]}
         else:

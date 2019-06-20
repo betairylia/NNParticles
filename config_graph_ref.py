@@ -108,6 +108,34 @@ config_dict = {
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
             'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'stages': [[0, 0]]
+    },
+    '2048_regular_512d_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [2048, 1280, 512, max(256, ccnt * 2), 32],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 1, 6],
+            'kernel_size' : [k, k, k, k, k],
+            'bik' : [0, 16, 16, 16, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [2048], # particle count
+            'generator' : [6], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
         },
         'stages': [[0, 0]]
     },
@@ -317,9 +345,38 @@ config_dict = {
             'gen_hdim' : [ld],
             'knnk' : [k // 2],
             'genStruct' : 'AdaIN',
+            'genFeatures' : True,
         },
         'stages': [[0, 0]]
     },
+    '2048_ultraShallow_512d_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 2,
+            'particles_count' : [2048, 32],
+            'conv_count' : [2, 0],
+            'res_count' : [0, 1],
+            'kernel_size' : [k, k],
+            'bik' : [0, 128],
+            'channels' : [1, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [2048], # particle count
+            'generator' : [4], # Generator depth
+            'maxLen' : [None],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'stages': [[0, 0]]
+    },
+
     'ultraShallow_512d_mono': {
         'useVector': False,
         'encoder': {
@@ -671,4 +728,4 @@ config_dict = {
     },
 }
 
-config = config_dict['regular_512d_AdaIN']
+config = config_dict['2048_regular_512d_AdaIN']

@@ -20,7 +20,7 @@ sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 sys.path.append(os.path.join(ROOT_DIR, 'data_prep'))
 sys.path.append(os.path.join(ROOT_DIR, '../'))
 
-import model_rawFC as model_net
+import model_fc_upconv as model_net
 
 # import model_graph as model
 # from model_graph import model_particles as model_net
@@ -110,8 +110,14 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss", gmtime()) + ")/")
 
 # Create the model
-ph_X = tf.placeholder(tf.float32, [args.batch_size, 5120, 4])
-normalized_X = ph_X[:, :, 0:3] / args.normalize
+_, _, normalize = dataLoad.get_fileNames(args.datapath)
+
+oD = args.output_dim
+bs = args.batch_size
+gN = args.voxel_size
+
+ph_X = tf.placeholder(tf.float32, [bs, gN, 4])
+normalized_X = (ph_X[:, :, 0:oD] - tf.broadcast_to(normalize['mean'], [bs, gN, oD])) / tf.broadcast_to(normalize['std'], [bs, gN, oD])
 
 with tf.variable_scope('net', reuse = False):
     train_rec, train_ep = model_net.get_model(ph_X, True, 0.98)
@@ -123,10 +129,7 @@ val_loss, val_ep = model_net.get_loss(val_rec, normalized_X, val_ep)
 optimizer = tf.train.AdamOptimizer(learning_rate = args.learning_rate, beta1 = args.beta1, beta2 = args.beta2, epsilon=1e-8)
 train_op = optimizer.minimize(train_loss)
 
-train_loss /= 100.0
-val_loss /= 100.0
-
-val_rec_out = val_rec * args.normalize
+val_rec_out = val_rec * tf.broadcast_to(normalize['std'], [bs, gN, oD]) + tf.broadcast_to(normalize['mean'], [bs, gN, oD])
 
 # Summary the variables
 tras = tf.summary.scalar('Training Loss', train_loss)
