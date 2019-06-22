@@ -543,17 +543,17 @@ class model_particles:
             if self.useVector == True and early_stop == 0:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
-                    # _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
-                    # n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
-                    # n = autofc(n, 512, self.act, name = 'globalPool/fc')
+                    _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
+                    n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
+                    n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
-                    # n = autofc(n, 512, name = 'globalPool/fc2')
+                    n = autofc(n, 512, name = 'globalPool/fc2')
                     
-                    n = tf.concat([gPos, n], axis = -1) # [bs, ccnt, cdim + prange]
-                    n = autofc(n, 512, name = 'fc1')
+                    # n = tf.concat([gPos, n], axis = -1) # [bs, ccnt, cdim + prange]
+                    # n = autofc(n, 512, name = 'fc1')
                     # n = norm(n, 0.999, is_train, name = 'norm')
-                    n = autofc(n, 512, name = 'fc2')
-                    n = tf.reduce_max(n, axis = 1, keepdims = True) # [bs, 1, 512]
+                    # n = autofc(n, 512, name = 'fc2')
+                    # n = tf.reduce_max(n, axis = 1, keepdims = True) # [bs, 1, 512]
 
                     # n = tf.reduce_max(n, axis = 1, keepdims = True)
                     # n = autofc(n, 512, name = 'fc1')
@@ -762,13 +762,16 @@ class model_particles:
                         n = z
 
                     n_ref = n
-                    if maxLen[bi] is not None:
+                    # if maxLen[bi] is not None:
                         # n = norm_tun(n, maxLen[bi])
                         # n = maxLen[bi] * n
-                        n_ref = norm_tun(n_ref, maxLen[bi])
+                        # n_ref = norm_tun(n_ref, maxLen[bi])
 
                     # regularizer to keep in local space
-                    regularizer += 0.02 * tf.reduce_mean(tf.norm(n, axis = -1))
+                    reg_curr = maxLen[bi]
+                    if reg_curr == None:
+                        reg_curr = 0.2
+                    regularizer += reg_curr * tf.reduce_mean(tf.norm(n, axis = -1))
 
                     # Back to world space
                     n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])

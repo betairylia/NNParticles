@@ -486,6 +486,60 @@ config_dict = {
         },
         'stages': [[0, 0]]
     },
+    '2048_vecRegular_refine_512d_AdaIN': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [2048, 1280, 512, max(256, ccnt * 2), 64],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 2, 4],
+            'kernel_size' : [k, k, k, k, k],
+            'bik' : [0, 16, 16, 16, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [512, 2048], # particle count
+            'generator' : [5, 3], # Generator depth
+            'maxLen' : [0.0, 0.5],
+            'nConv' : [2, 0],
+            'nRes' : [3, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'stages': [[0, 0]]
+    },
+    '2048_vecRegular_doubleDec_512d_AdaIN': {
+        'useVector': True,
+        'encoder': {
+            'blocks' : 5,
+            'particles_count' : [2048, 1280, 512, max(256, ccnt * 2), 64],
+            'conv_count' : [1, 2, 2, 0, 0],
+            'res_count' : [0, 0, 0, 2, 4],
+            'kernel_size' : [k, k, k, k, k],
+            'bik' : [0, 16, 16, 16, 64],
+            'channels' : [hd // 2, 2 * hd // 3, hd, 3 * hd // 2, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 2,
+            'pcnt' : [128, 2048], # particle count
+            'generator' : [5, 5], # Generator depth
+            'maxLen' : [None, None],
+            'nConv' : [2, 0],
+            'nRes' : [3, 0],
+            'hdim' : [max(ld, hd * 2), hd // 3],
+            'fdim' : [512, ld], # dim of features used for folding
+            'gen_hdim' : [512, ld],
+            'knnk' : [k, k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'stages': [[0, 0]]
+    },
     'vecRegular_ngF_noSep': {
         'useVector': True,
         'encoder': {
