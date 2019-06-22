@@ -838,4 +838,4 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_newRegular_512d_AdaIN']
+config = config_dict['2048_newRegular_512d_kernelConv_AdaIN']
