@@ -208,8 +208,10 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         
         # normalize it to be a true "PDF"
         if PDFNorm == True:
-            normalize_factor = tf.reduce_mean(tf.abs(cW), axis = [0, 1, 2], keepdims = True)
+            cW = tf.nn.relu(cW)
+            normalize_factor = tf.reduce_mean(cW, axis = [0, 1, 2], keepdims = True)
             cW = cW / (normalize_factor + 1e-5)
+            cW = tf.log(cW + 1e-5)
             
             scaling = tf.get_variable('cW_scale', shape = [1, 1, 1, channels, fCh], dtype = default_dtype)
             cW = scaling * cW
