@@ -131,9 +131,9 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recomp
                     dist = -minusdist
                 else:
                     dist = tf.norm(drow - tf.transpose(drow, perm = [0, 2, 1, 3]), ord = 'euclidean', axis = -1)
-                dist.linalg.set_diag(dist, tf.constant(100.0, shape = [bs, Nx]))
+                dist = tf.linalg.set_diag(dist, tf.constant(100.0, shape = [bs, Nx], dtype = tf.float16))
                 nearest_norm = tf.reduce_min(dist, axis = -1)
-                nearest_norm = tf.pow(nearest_norm, 3)
+                nearest_norm = tf.pow(tf.cast(nearest_norm, default_dtype), 3)
 
         _kNNEdg, _TopKIdx = tf.nn.top_k(minusdist, k)
         TopKIdx = _TopKIdx[:, :, :] # No self-loops? (Separated branch for self-conv)
@@ -226,8 +226,9 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
 
         if nearestNorm == True:
             # n     => [bs, N, k, channels]
-            # nnorm => [bs, N]
-            n = tf.multiply(n, tf.broadcast_to(tf.reshape(nnnorm, [bs, N, 1]), [bs, N, k]))
+            # nnnorm=> [bs, N]
+            nnnorm_collected = tf.gather_nd(nnnorm, kNNIdx)
+            n = tf.multiply(n, tf.broadcast_to(tf.reshape(nnnorm_collected, [bs, N, k, 1]), [bs, N, k, channels]))
 
         print(n.shape)
         print("Graph cConv: [%3d x %2d] = %4d" % (channels, fCh, channels * fCh))
