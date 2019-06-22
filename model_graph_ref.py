@@ -24,8 +24,8 @@ default_dtype = tf.float32
 summary_scope = None
 SN = False
 
-nearestNorm = True
-PDFNorm = False
+nearestNorm = False
+PDFNorm = True
 
 PDFNorm = PDFNorm and not nearestNorm
 
