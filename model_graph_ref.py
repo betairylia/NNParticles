@@ -24,6 +24,11 @@ default_dtype = tf.float32
 summary_scope = None
 SN = False
 
+nearestNorm = True
+PDFNorm = False
+
+PDFNorm = PDFNorm and not nearestNorm
+
 def norm(inputs, decay, is_train, name):
 
     decay = 0.99
@@ -96,7 +101,7 @@ def spectral_norm(w, iteration=1):
 
 # Inputs: [bs, N, C]
 # Builds edges X -> Y
-def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
+def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recompute = True):
 
     with tf.variable_scope(name):
         
@@ -118,6 +123,17 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
         # minusdist = -tf.sqrt(tf.reduce_sum(tf.square(local_pos), axis = 3))
         # minusdist = -tf.sqrt(tf.add_n(tf.unstack(tf.square(local_pos), axis = 3))) # Will this be faster?
         minusdist = -tf.norm(local_pos, ord = 'euclidean', axis = -1)
+        
+        nearest_norm = None
+        if nearestNorm == True:
+            if recompute == True:
+                if xysame == True:
+                    dist = -minusdist
+                else:
+                    dist = tf.norm(drow - tf.transpose(drow, perm = [0, 2, 1, 3]), ord = 'euclidean', axis = -1)
+                dist.linalg.set_diag(dist, tf.constant(100.0, shape = [bs, Nx]))
+                nearest_norm = tf.reduce_min(dist, axis = -1)
+                nearest_norm = tf.pow(nearest_norm, 3)
 
         _kNNEdg, _TopKIdx = tf.nn.top_k(minusdist, k)
         TopKIdx = _TopKIdx[:, :, :] # No self-loops? (Separated branch for self-conv)
@@ -146,14 +162,14 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen'):
 
         kNNEdg = tf.stop_gradient(kNNEdg)
 
-        return posX, posY, kNNIdx, kNNEdg
+        return posX, posY, kNNIdx, kNNEdg, nearest_norm
 
-def kNNG_gen(inputs, k, pos_range, name = 'kNNG_gen'):
+def kNNG_gen(inputs, k, pos_range, name = 'kNNG_gen', recompute = True):
 
-    p, _, idx, edg = bip_kNNG_gen(inputs, inputs, k, pos_range, name)
-    return p, idx, edg
+    p, _, idx, edg, nnnorm = bip_kNNG_gen(inputs, inputs, k, pos_range, name, xysame = True, recompute = recompute)
+    return p, idx, edg, nnnorm
 
-def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name):
+def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name, nnnorm):
     
     with tf.variable_scope(name):
 
@@ -191,11 +207,12 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         cW = tf.reshape(n, [bs, N, k, channels, fCh])
         
         # normalize it to be a true "PDF"
-        normalize_factor = tf.reduce_mean(tf.abs(cW), axis = [0, 1, 2], keepdims = True)
-        cW = cW / (normalize_factor + 1e-5)
-        
-        scaling = tf.get_variable('cW_scale', shape = [1, 1, 1, channels, fCh], dtype = default_dtype)
-        cW = scaling * cW
+        if PDFNorm == True:
+            normalize_factor = tf.reduce_mean(tf.abs(cW), axis = [0, 1, 2], keepdims = True)
+            cW = cW / (normalize_factor + 1e-5)
+            
+            scaling = tf.get_variable('cW_scale', shape = [1, 1, 1, channels, fCh], dtype = default_dtype)
+            cW = scaling * cW
 
         # Batch matmul won't work for more than 65535 matrices ???
         # n = tf.matmul(n, tf.reshape(neighbors, [bs, Nx, k, Cy, 1]))
@@ -206,6 +223,11 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         # MatMul
         n = tf.reshape(n, [bs, N, k, channels, fCh])
         n = tf.reduce_sum(tf.multiply(cW, n), axis = -1)
+
+        if nearestNorm == True:
+            # n     => [bs, N, k, channels]
+            # nnorm => [bs, N]
+            n = tf.multiply(n, tf.broadcast_to(tf.reshape(nnnorm, [bs, N, 1]), [bs, N, k]))
 
         print(n.shape)
         print("Graph cConv: [%3d x %2d] = %4d" % (channels, fCh, channels * fCh))
@@ -288,7 +310,7 @@ def kNNGPosition_refine(input_position, input_feature, refine_maxLength, act, hi
 
         return refined_pos
 
-def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, name = 'gconv', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None):
+def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, name = 'gconv', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None):
     
     with tf.variable_scope(name):
         
@@ -300,7 +322,7 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
             # mlp = [filters * 2, filters * 2]
             mlp = [filters * 3 // 2]
         
-        n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv')
+        n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv', nnnorm = nnnorm)
         if use_norm:
             # n = norm(n, 0.999, is_train, name = 'norm')
             pass
@@ -309,7 +331,7 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
     
     return n
 
-def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None):
+def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None):
 
     with tf.variable_scope(name):
         
@@ -319,7 +341,7 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
             nn = n
             with tf.variable_scope('res%d' % r):
                 for c in range(num_conv):
-                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp)
+                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp, nnnorm = nnnorm)
             
             n = n + nn
         
@@ -501,6 +523,8 @@ class model_particles:
                 target_block = blocks
 
             edg_sample = None
+
+            nnnorm = None
             
             for i in range(target_block):
                 
@@ -521,21 +545,21 @@ class model_particles:
                         pool_pos.append(gPos)
 
                         # Collect features after pool
-                        _, _, bpIdx, bpEdg = bip_kNNG_gen(gPos, prev_pos, bik[i], 3, name = 'gpool/ggen')
-                        n = gconv(prev_n, bpIdx, bpEdg, channels[i], self.act, True, is_train, 'gpool/gconv', w_init, b_init)
+                        _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(gPos, prev_pos, bik[i], 3, name = 'gpool/ggen', recompute = False)
+                        n = gconv(prev_n, bpIdx, bpEdg, channels[i], self.act, True, is_train, 'gpool/gconv', w_init, b_init, nnnorm = nnnorm)
 
                     if i == 1:
                         edg_sample = bpEdg[..., 0:3] # + tf.random.uniform([self.batch_size, particles_count[i], 1, 3], minval = -24., maxval = 24.)
                         edg_sample = tf.reshape(edg_sample, [-1, 3])
                         edg_sample = [edg_sample, [self.batch_size * particles_count[i]]]
 
-                    gPos, gIdx, gEdg = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen')
+                    gPos, gIdx, gEdg, nnnorm = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen')
 
                     if i == 0:
-                        n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init)
+                        n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init, nnnorm = nnnorm)
 
-                    n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init)
-                    n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init)
+                    n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init, nnnorm = nnnorm)
+                    n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init, nnnorm = nnnorm)
 
             if self.useVector == False and early_stop == 0:
                 n = autofc(n, target_dim, name = 'enc%d/convOut' % (blocks - 1))
@@ -543,8 +567,8 @@ class model_particles:
             if self.useVector == True and early_stop == 0:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
-                    _, _, bpIdx, bpEdg = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen')
-                    n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512])
+                    _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen', recompute = False)
+                    n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512], nnnorm = nnnorm)
                     n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
                     n = autofc(n, 512, name = 'globalPool/fc2')
@@ -618,6 +642,7 @@ class model_particles:
             coarse_pos_ref = coarse_pos
 
             regularizer = 0.0
+            nnnorm = None
 
             # Meta-data
             meta = []
@@ -795,12 +820,12 @@ class model_particles:
                     if genFeatures:
                         n = nf
                     else:
-                        _, _, gp_idx, gp_edg = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bipggen')
-                        n = gconv(coarse_fea, gp_idx, gp_edg, hdim[bi], self.act, True, is_train, 'convt', w_init, b_init)
+                        _, _, gp_idx, gp_edg, nnnorm = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bipggen', xysame = False, recompute = True)
+                        n = gconv(coarse_fea, gp_idx, gp_edg, hdim[bi], self.act, True, is_train, 'convt', w_init, b_init, nnnorm)
 
                     if nConv[bi] > 0:
-                        _, gidx, gedg = kNNG_gen(pos, knnk[bi], 3, name = 'ggen')
-                        n = convRes(n, gidx, gedg, nConv[bi], nRes[bi], hdim[bi], self.act, True, is_train, 'resblock', w_init, b_init)
+                        _, gidx, gedg, nnnorm = kNNG_gen(pos, knnk[bi], 3, name = 'ggen')
+                        n = convRes(n, gidx, gedg, nConv[bi], nRes[bi], hdim[bi], self.act, True, is_train, 'resblock', w_init, b_init, nnnorm = nnnorm)
 
                     coarse_pos = pos
                     coarse_fea = n
