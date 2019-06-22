@@ -112,6 +112,33 @@ config_dict = {
         },
         'stages': [[0, 0]]
     },
+    '2048_newRegular_512d_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [2048, 512, 32],
+            'conv_count' : [2, 0, 0],
+            'res_count' : [0, 2, 3],
+            'kernel_size' : [k, k, k],
+            'bik' : [0, 48, 96],
+            'channels' : [hd // 2, hd, max(ld, hd * 2)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [2048], # particle count
+            'generator' : [5], # Generator depth
+            'maxLen' : [0.05],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'stages': [[0, 0]]
+    },
     '2048_regular_512d_AdaIN': {
         'useVector': False,
         'encoder': {
@@ -782,4 +809,4 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_regular_512d_AdaIN']
+config = config_dict['2048_newRegular_512d_AdaIN']

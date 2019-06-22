@@ -25,7 +25,7 @@ summary_scope = None
 SN = False
 
 nearestNorm = False
-PDFNorm = True
+PDFNorm = False
 
 PDFNorm = PDFNorm and not nearestNorm
 
@@ -135,7 +135,7 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recomp
                 nearest_norm = tf.reduce_min(dist, axis = -1)
 
                 nnmean = tf.reduce_mean(nearest_norm, keepdims = True)
-                nearest_norm = tf.min(nearest_norm, nnmean) / nnmean
+                nearest_norm = tf.minimum(nearest_norm, nnmean) / nnmean
                 
                 nearest_norm = tf.pow(tf.cast(nearest_norm, default_dtype), 3)
 
@@ -326,8 +326,8 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
             fCh = 2
 
         if mlp == None:
-            # mlp = [filters * 2, filters * 2]
-            mlp = [filters * 3 // 2]
+            mlp = [filters * 2, filters * 2]
+            # mlp = [filters * 3 // 2]
         
         n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv', nnnorm = nnnorm)
         if use_norm:
