@@ -119,6 +119,8 @@ if args.dtype == tf.float16:
     optimizer = tf.contrib.mixed_precision.LossScaleOptimizer(optimizer, loss_scale_manager)
     os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
 
+_, _, normalize = dataLoad.get_fileNames(args.datapath)
+
 # model = model_net(16, args.latent_dim, args.batch_size, optimizer)
 model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim)
 model.particle_hidden_dim = args.hidden_dim
@@ -130,7 +132,11 @@ model.cluster_count = args.cluster_count
 model.doSim = args.dosim
 model.doLoop = args.dosim and args.doloop
 model.loops = args.loop_sim
-model.normalize = args.normalize
+
+model.normalize = normalize
+if normalize == {}:
+    print("No normalization descriptor found ... ")
+    model.normalize = {'mean': 0.0, 'std': args.normalize}
 
 # Headers
 # headers = dataLoad.read_file_header(dataLoad.get_fileNames(args.datapath)[0])

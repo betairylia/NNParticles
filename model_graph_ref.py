@@ -24,7 +24,7 @@ default_dtype = tf.float32
 summary_scope = None
 SN = False
 
-nearestNorm = False
+nearestNorm = True
 PDFNorm = False
 
 PDFNorm = PDFNorm and not nearestNorm
@@ -124,26 +124,34 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recomp
         # minusdist = -tf.sqrt(tf.add_n(tf.unstack(tf.square(local_pos), axis = 3))) # Will this be faster?
         minusdist = -tf.norm(local_pos, ord = 'euclidean', axis = -1)
         
-        nearest_norm = None
-        if nearestNorm == True:
-            if recompute == True:
-                if xysame == True:
-                    dist = -minusdist
-                else:
-                    dist = tf.norm(drow - tf.transpose(drow, perm = [0, 2, 1, 3]), ord = 'euclidean', axis = -1)
-                dist = tf.linalg.set_diag(dist, tf.constant(100.0, shape = [bs, Nx], dtype = tf.float16))
-                nearest_norm = tf.reduce_min(dist, axis = -1)
-
-                nnmean = tf.reduce_mean(nearest_norm, keepdims = True)
-                nearest_norm = tf.minimum(nearest_norm, nnmean) / nnmean
-                
-                nearest_norm = tf.pow(tf.cast(nearest_norm, default_dtype), 3)
-
         _kNNEdg, _TopKIdx = tf.nn.top_k(minusdist, k)
         TopKIdx = _TopKIdx[:, :, :] # No self-loops? (Separated branch for self-conv)
         # TopKIdx = _TopKIdx # Have self-loops?
         kNNEdg = -_kNNEdg[:, :, :] # Better methods?
         kNNEdg = tf.stop_gradient(kNNEdg) # Don't flow gradients here to avoid nans generated for unselected edges
+        
+        nearest_norm = None
+        if nearestNorm == True:
+            if recompute == True:
+                if xysame == True:
+                    # nearest_norm = tf.reduce_max(kNNEdg, axis = 2) # distance to kth nearest point
+                    # nearest_norm = tf.ones_like(nearest_norm)
+                    sigma = tf.get_variable('rbf_sigma', [1], dtype = tf.float16, initializer = tf.constant_initializer(-2.5))
+                    nearest_norm = RBF_dist(kNNEdg, tf.exp(sigma))
+                    nearest_norm = tf.reduce_mean(nearest_norm, axis = 2)
+                    nearest_norm = 1.0 / k / (tf.cast(nearest_norm, default_dtype) + 1e-5)
+                else:
+                    print("!")
+                    dist = tf.norm(drow - tf.transpose(drow, perm = [0, 2, 1, 3]), ord = 'euclidean', axis = -1)
+                    dist = tf.linalg.set_diag(dist, tf.constant(100.0, shape = [bs, Nx], dtype = tf.float16))
+                    nearest_norm = tf.reduce_min(dist, axis = -1)
+
+                # nnmean = tf.reduce_mean(nearest_norm, keepdims = True)
+                # nearest_norm = tf.minimum(nearest_norm, nnmean) / nnmean
+                # nearest_norm = nearest_norm / nnmean
+
+                # nearest_norm = tf.pow(tf.cast(nearest_norm, default_dtype), 3)
+        
         kNNEdg = tf.cast(tf.reshape(kNNEdg, [bs, Nx, k, 1]), default_dtype)
 
         # Build NxKxC Neighboor tensor
@@ -173,6 +181,13 @@ def kNNG_gen(inputs, k, pos_range, name = 'kNNG_gen', recompute = True):
     p, _, idx, edg, nnnorm = bip_kNNG_gen(inputs, inputs, k, pos_range, name, xysame = True, recompute = recompute)
     return p, idx, edg, nnnorm
 
+def RBF_dist(d, sigma):
+    
+    d = d / (2.0 * sigma)
+    d = tf.exp(-d)
+
+    return d
+
 def RBF(x, y, sigma):
 
     distance_norm = tf.norm(x - y, ord = 'euclidean', axis = -1)
@@ -195,20 +210,30 @@ def bip_kNNGConvLayer_kernel(inputs, kNNIdx, kNNEdg, act, channels, filters, fCh
         n = tf.gather_nd(inputs, kNNIdx)
 
         # Get layer variables
-        F       = tf.get_variable('F', shape = [filters, fCh, channels, 4], trainable = True, initializer = f_init, dtype = default_dtype)
+        W       = tf.get_variable('W', shape = [filters, Ci, channels], trainable = True, initializer = f_init, dtype = default_dtype)
+        F       = tf.get_variable('F', shape = [filters, 3], trainable = True, initializer = f_init, dtype = default_dtype)
         b       = tf.get_variable('b', shape = [channels], trainable = True, initializer = b_init, dtype = default_dtype)
-        sigma   = tf.get_variable('K', shape = [fCh, channels], dtype = default_dtype)
+        sigma   = tf.get_variable('K', shape = [filters], dtype = default_dtype)
 
-        # reduce channels for inputs
-        n = autofc(neighbors, fCh * channels, None, name = 'feature/feature_combine')
-        n = tf.reshape(n, [bs, Ny, k, 1, fCh, channels, 1])
+        sigma = tf.exp(sigma)
 
-        # combine feature and position
-        n = tf.concat([n, tf.broadcast_to(tf.reshape(kNNEdg, [bs, Ny, k, 1, 1, 1, 3]), [bs, Ny, k, 1, fCh, channels, 3])], axis = -1)
-        
-        # "Convolution"
-        n = RBF(n, tf.reshape(F, [1, 1, 1, filters, fCh, channels, 4]), tf.reshape(sigma, [1, 1, 1, 1, fCh, channels]))
-        n = tf.reduce_mean(n, axis = [2, 3, 4]) # => [bs, Ny, channels]
+        # old approach
+        if False:
+            # reduce channels for inputs
+            n = autofc(n, fCh * channels, None, name = 'feature/feature_combine')
+            n = tf.reshape(n, [bs, Ny, k, 1, fCh, channels, 1])
+
+            # combine feature and position
+            print(kNNEdg.shape)
+            n = tf.concat([n, tf.tile(tf.reshape(kNNEdg, [bs, Ny, k, 1, 1, 1, 3]), [1, 1, 1, 1, fCh, channels, 1])], axis = -1)
+            
+            # "Convolution"
+            n = RBF(n, tf.reshape(F, [1, 1, 1, filters, fCh, channels, 4]), tf.reshape(sigma, [1, 1, 1, 1, fCh, channels]))
+            n = tf.reduce_mean(n, axis = [2, 3, 4]) # => [bs, Ny, channels]
+        # No way. Give up.
+        else:
+            _lpos = tf.reshape(kNNEdg, [bs, Ny, k,       1, 3])
+            _fpos = tf.reshape(     F, [ 1,  1, 1, filters, 3])
 
         # bias and act
         n = tf.nn.bias_add(n, b)
@@ -285,9 +310,14 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         # n = tf.reshape(n, [bs, Nx, k, channels])
 
         b = tf.get_variable('b_out', dtype = default_dtype, shape = [channels], initializer = b_init, trainable = True)
-        n = tf.reduce_mean(n, axis = 2)
-        # n = tf.reduce_max(n, axis = 2)
-        n = tf.nn.bias_add(n, b)
+        
+        if True:
+            n = tf.reduce_mean(n, axis = 2)
+            n = tf.nn.bias_add(n, b)
+            n = autofc(n, channels, None, name = 'kernel/feature_combine')
+        else:
+            n = tf.reduce_max(n, axis = 2)
+            n = autofc(n, channels, None, name = 'kernel/evidance_combine')
         
         if act is not None:
             n = act(n)
@@ -370,7 +400,7 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
             fCh = 2
 
         # feature
-        if False:
+        if True:
             if mlp == None:
                 mlp = [filters * 2, filters * 2]
                 # mlp = [filters * 3 // 2]
@@ -393,7 +423,7 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
 
     return n
 
-def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None):
+def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None, kernel_filters = 16, k_init = tf.constant_initializer(value=1.0)):
 
     with tf.variable_scope(name):
         
@@ -403,7 +433,7 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
             nn = n
             with tf.variable_scope('res%d' % r):
                 for c in range(num_conv):
-                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp, nnnorm = nnnorm)
+                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp, nnnorm = nnnorm, kernel_filters = kernel_filters, k_init = k_init)
             
             n = n + nn
         
@@ -624,6 +654,9 @@ class model_particles:
                         edg_sample = [edg_sample, [self.batch_size * particles_count[i]]]
 
                     gPos, gIdx, gEdg, nnnorm = kNNG_gen(gPos, kernel_size[i], 3, name = 'ggen')
+                    
+                    if i == 0:
+                        gt_density = nnnorm
 
                     if i == 0:
                         n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i])
@@ -657,9 +690,9 @@ class model_particles:
                     gPos = zeroPos
 
             if returnPool == True:
-                return gPos, n, var_list, pool_pos, freq_loss, pool_eval_func
+                return gPos, n, var_list, pool_pos, freq_loss, pool_eval_func, gt_density
 
-            return gPos, n, var_list, freq_loss, pool_eval_func, edg_sample
+            return gPos, n, var_list, freq_loss, pool_eval_func, edg_sample, gt_density
     
     def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, begin_block = 0, is_train = False, reuse = False):
 
@@ -776,6 +809,8 @@ class model_particles:
                         # generator
                         z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
                         uniform_dist = z
+                        
+                        fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
                        
                         n = z
 
@@ -790,8 +825,10 @@ class model_particles:
                                 else:
                                     n = autofc(n, gen_hdim[bi], name = 'fc')
                                 
-                                s_mean = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_mean')
-                                s_std  = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_std')
+                                # s_mean = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_mean')
+                                # s_std  = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_std')
+                                s_mean = autofc(fuse_fea, gen_hdim[bi], name = 'feaFuse_mean')
+                                s_std  = autofc(fuse_fea, gen_hdim[bi], name = 'feaFuse_std')
 
                                 s_mean = tf.reshape(s_mean, [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
                                 s_std  = tf.reshape(s_std,  [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
@@ -1003,7 +1040,7 @@ class model_particles:
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
 
             # Go through the particle AE
-            posX, feaX, _v, _floss, eX, esamp = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
+            posX, feaX, _v, _floss, eX, esamp, gtd = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
             outDim = self.outDim
             _, [rec_X, rec_X_ref, fold_X], _, r, meta = self.particleDecoder(posX, feaX, self.ph_card, outDim, is_train = is_train, reuse = reuse)
 
@@ -1015,7 +1052,7 @@ class model_particles:
             if is_train == True:
                 for i in range(len(self.stages)):
                     
-                    posX, feaX, _v, _floss, eX, _ = self.particleEncoder(normalized_X, self.particle_latent_dim, early_stop = self.stages[i][0], is_train = is_train, reuse = True)
+                    posX, feaX, _v, _floss, eX, _, _ = self.particleEncoder(normalized_X, self.particle_latent_dim, early_stop = self.stages[i][0], is_train = is_train, reuse = True)
                     outDim = self.outDim
                     _, [rec_X, rec_X_ref, fold_X], _, r, _ = self.particleDecoder(posX, feaX, self.ph_card, outDim, begin_block = self.stages[i][1], is_train = is_train, reuse = True)
                     
@@ -1056,7 +1093,8 @@ class model_particles:
 
                 rec = rec * tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
 
-        return rec, self.ph_X[:, :, 0:outDim], loss, vls, meta, esamp
+        print(gtd)
+        return rec, tf.concat([self.ph_X[:, :, 0:outDim], tf.reshape(gtd, [self.batch_size, self.gridMaxSize, 1])], axis = -1), loss, vls, meta, esamp
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):

@@ -1,7 +1,9 @@
 nvcc = /usr/local/cuda-10.0/bin/nvcc
 cudalib =  /usr/local/cuda-10.0/lib64
-tensorflow = /home/betairya/anaconda3/envs/tensorflow/lib/python3.6/site-packages/tensorflow/include
-TF_LIB = /home/betairya/anaconda3/envs/tensorflow/lib/python3.6/site-packages/tensorflow
+# tensorflow = /home/betairya/anaconda3/envs/tensorflow/lib/python3.6/site-packages/tensorflow/include
+# TF_LIB = /home/betairya/anaconda3/envs/tensorflow/lib/python3.6/site-packages/tensorflow
+TF_LIB = /home/betairya/.local/lib/python3.6/site-packages/tensorflow/
+tensorflow = /home/betairya/.local/lib/python3.6/site-packages/tensorflow/include
 # To get TF_LIB: python -c 'import tensorflow as tf; print(tf.sysconfig.get_lib())'
 
 all: tf_approxmatch_so.so tf_approxmatch_g.cu.o tf_nndistance_so.so tf_nndistance_g.cu.o

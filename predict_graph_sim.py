@@ -111,6 +111,8 @@ if args.dtype == tf.float16:
     optimizer = tf.contrib.mixed_precision.LossScaleOptimizer(optimizer, loss_scale_manager)
     os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
 
+_, _, normalize = dataLoad.get_fileNames(args.datapath)
+
 # model = model_net(16, args.latent_dim, args.batch_size, optimizer)
 model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim)
 model.particle_hidden_dim = args.hidden_dim
@@ -122,7 +124,11 @@ model.cluster_count = args.cluster_count
 model.doSim = args.dosim
 model.doLoop = args.dosim and args.doloop
 model.loops = args.loop_sim
-model.normalize = args.normalize
+
+model.normalize = normalize
+if normalize == {}:
+    print("No normalization descriptor found ... ")
+    model.normalize = {'mean': 0.0, 'std': args.normalize}
 
 # Headers
 # headers = dataLoad.read_file_header(dataLoad.get_fileNames(args.datapath)[0])
@@ -132,14 +138,17 @@ model.initial_grid_size = model.total_world_size / 16
 # model.initial_grid_size = model.total_world_size / 4
 
 # Build the model
-normalized_X = model.ph_X / args.normalize
-normalized_Y = model.ph_Y / args.normalize
-cpos, cfea, poolX, evalsX = model.build_predict_Enc(normalized_X, True, False)
-if args.dosim:
-    cpos_Y, cfea_Y, poolY, evalsY = model.build_predict_Enc(normalized_Y, False, True)
+# normalized_X = model.ph_X / args.normalize
+# normalized_Y = model.ph_Y / args.normalize
 
 pRange = 3
 outDim = args.output_dim
+normalized_X = (model.ph_X[:, :, 0:outDim] - tf.broadcast_to(normalize['mean'], [args.batch_size, args.voxel_size, outDim])) / tf.broadcast_to(normalize['std'], [args.batch_size, args.voxel_size, outDim])
+normalized_Y = (model.ph_Y[:, :, 0:outDim] - tf.broadcast_to(normalize['mean'], [args.batch_size, args.voxel_size, outDim])) / tf.broadcast_to(normalize['std'], [args.batch_size, args.voxel_size, outDim])
+
+cpos, cfea, poolX, evalsX = model.build_predict_Enc(normalized_X, True, False)
+if args.dosim:
+    cpos_Y, cfea_Y, poolY, evalsY = model.build_predict_Enc(normalized_Y, False, True)
 
 ph_cpos = tf.placeholder(args.dtype, [args.batch_size, args.cluster_count, pRange])
 ph_cfea = tf.placeholder(args.dtype, [args.batch_size, args.cluster_count, args.cluster_dim])
@@ -231,11 +240,11 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
         # Initial batch - compute latent clusters
         if ecnt == 0 and args.dosim:
-            _cpos, _cfea = sess.run([cpos, cfea], feed_dict = { model.ph_X: _x[0] })
+            _cpos, _cfea, _gtX = sess.run([cpos, cfea, normalized_X], feed_dict = { model.ph_X: _x[0] })
             _spos, _sfea = _cpos, _cfea
             _rec, n_loss = sess.run([prec, ___l], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
 
-            groundTruth[0, :, :] = _x[0][:, :, 0:outDim]
+            groundTruth[0, :, :] = _gtX[:, :, 0:outDim]
             reconstruct[0, :, :] = _rec[:, :, 0:outDim]
             batch_idx_train += 1
             
@@ -245,14 +254,14 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
         
         if args.dosim:
             # Simulation
-            _spos, _sfea, _rec, n_loss = sess.run([spos, sfea, rec, loss], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_Y: _x[1], model.ph_max_length: maxl_array })
+            _spos, _sfea, _rec, n_loss, _gtX, _gtY = sess.run([spos, sfea, rec, loss, normalized_X, normalized_Y], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_Y: _x[1], model.ph_max_length: maxl_array, model.ph_X: _x[0] })
             
             # Get encoded features & clusters
             # _cpos_x, _cfea_x = sess.run([  cpos,   cfea], feed_dict = { model.ph_X: _x[0] })
             # _cpos_y, _cfea_y = sess.run([cpos_Y, cfea_Y], feed_dict = { model.ph_Y: _x[1] })
         else:
             # Just do auto-encoder
-            _cpos, _cfea, pX = sess.run([cpos, cfea, poolX], feed_dict = {model.ph_X: _x[0]})
+            _cpos, _cfea, pX, _gtX = sess.run([cpos, cfea, poolX, normalized_X], feed_dict = {model.ph_X: _x[0]})
             # print(_cfea)
             _rec, _recf, n_loss = sess.run([prec, precf, ___l], feed_dict = { ph_cpos: _cpos, ph_cfea: _cfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
 
@@ -262,9 +271,9 @@ for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapat
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
 
-        groundTrutX[sidx:eidx, :, :] = _x[0][:, :, 0:outDim]
+        groundTrutX[sidx:eidx, :, :] = _gtX[:, :, 0:outDim]
         if args.dosim:
-            groundTruth[sidx:eidx, :, :] = _x[1][:, :, 0:outDim]
+            groundTruth[sidx:eidx, :, :] = _gtY[:, :, 0:outDim]
         reconstruct[sidx:eidx, :, :] = _rec[:, :, 0:outDim]
         # fold[sidx:eidx, :, :] = _recf[:, :, 0:outDim]
 

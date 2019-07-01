@@ -2,7 +2,7 @@
 vSize = 5120
 # ccnt = 64
 # cdim = 32
-ccnt = 1280
+ccnt = 512
 cdim = 4
 hd = 64
 ld = 128
@@ -134,6 +134,69 @@ config_dict = {
         },
         'stages': [[0, 0]]
     },
+
+    '2048_newRegular_64c_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [2048, 512, 64],
+            'conv_count' : [2, 0, 0],
+            'res_count' : [0, 2, 3],
+            'kernel_size' : [k, k, k],
+            'bik' : [0, 48, 96],
+            'channels' : [hd // 2, hd * 2, max(ld, hd * 4)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [2048], # particle count
+            'generator' : [5], # Generator depth
+            'maxLen' : [0.05],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'simulator': {
+            'knnk': k,
+            'layers': [256],
+        },
+        'stages': [[0, 0]]
+    },
+    '2048_ultraShallow_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 2,
+            'particles_count' : [2048, ccnt],
+            'conv_count' : [2, 1],
+            'res_count' : [0, 0],
+            'kernel_size' : [k, k],
+            'bik' : [0, 16],
+            'channels' : [16, 16],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [2048], # particle count
+            'generator' : [3], # Generator depth
+            'maxLen' : [0.0],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'simulator': {
+            'knnk': k,
+            'layers': [32],
+        },
+        'stages': [[0, 0]]
+    },
 }
 
-config = config_dict['ultraShallow']
+config = config_dict['2048_ultraShallow_AdaIN']

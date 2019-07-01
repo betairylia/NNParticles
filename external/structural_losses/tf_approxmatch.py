@@ -3,7 +3,7 @@ from tensorflow.python.framework import ops
 import os.path as osp
 
 base_dir = osp.dirname(osp.abspath(__file__))
-
+print(base_dir)
 approxmatch_module = tf.load_op_library(osp.join(base_dir, 'tf_approxmatch_so.so'))
 
 

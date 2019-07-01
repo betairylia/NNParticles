@@ -51,6 +51,15 @@ def lnorm(inputs, decay, is_train, name):
             return tf.contrib.layers.instance_norm(inputs, epsilon = 1e-3, scope = name)
     # return tf.contrib.layers.group_norm(inputs, 
 
+def AdaIN(inputs, mean, std, axes = [2], name = 'AdaIN', epsilon = 1e-5):
+
+    with tf.variable_scope(name):
+
+        c_mean, c_var = tf.nn.moments(inputs, axes = axes, keep_dims = True)
+        c_std = tf.sqrt(c_var + epsilon)
+
+        return std * (inputs - c_mean) / c_std + mean
+
 def norm(inputs, decay, is_train, name):
 
     decay = 0.99
@@ -346,9 +355,9 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
     
     with tf.variable_scope(name):
         
-        fCh = 6
+        fCh = 2
         if filters >= 256: 
-            fCh = 4
+            fCh = 2
 
         if mlp == None:
             # mlp = [filters * 2, filters * 2]
@@ -384,14 +393,14 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
         
         return n
 
-def autofc(inputs, outDim, act = None, bias = True, name = 'fc', forceSN = False):
+def autofc(inputs, outDim, act = None, bias = True, name = 'fc', forceSN = False, W_init = None):
     
     input_shape = inputs.shape.as_list()
     inputs = tf.reshape(inputs, [-1, input_shape[-1]])
 
     with tf.variable_scope(name):
         
-        w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype)
+        w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype, initializer = W_init)
 
         if SN or forceSN:
             x = tf.matmul(inputs, spectral_norm(w))
@@ -658,6 +667,41 @@ class model_particles:
                             nf = autofc(n, hdim[bi], name = 'gen_feature_out')
                         n = autofc(n, pos_range, name = 'gen_out')
                         n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+
+                    elif generator_struct == 'AdaIN':
+                        
+                        # generator
+                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        uniform_dist = z
+                        
+                        fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
+                       
+                        n = z
+
+                        for gi in range(generator[bi]):
+                            with tf.variable_scope('gen%d' % gi):
+                                n = autofc(n, gen_hdim[bi], name = 'fc')
+                                
+                                # s_mean = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_mean')
+                                # s_std  = autofc(coarse_fea, gen_hdim[bi], name = 'feaFuse_std')
+                                s_mean = autofc(fuse_fea, gen_hdim[bi], name = 'feaFuse_mean')
+                                s_std  = autofc(fuse_fea, gen_hdim[bi], name = 'feaFuse_std')
+
+                                s_mean = tf.reshape(s_mean, [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
+                                s_std  = tf.reshape(s_std,  [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
+
+                                n = AdaIN(n, s_mean, s_std)
+                                # n = AdaIN(n, s_mean, s_std, axes = [0, 1, 2])
+
+                                n = self.act(n)
+                        
+                        if genFeatures:
+                            nf = autofc(n, hdim[bi], name = 'gen_feature_out')
+                        
+                        n = autofc(n, pos_range, name = 'gen_out')
+
+                        n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+                    
                     
                     elif generator_struct == 'final_selection':
                         
@@ -698,13 +742,12 @@ class model_particles:
                         n = z
 
                     n_ref = n
-                    if maxLen[bi] is not None:
-                        # n = norm_tun(n, maxLen[bi])
-                        # n = maxLen[bi] * n
-                        n_ref = norm_tun(n_ref, maxLen[bi])
 
                     # regularizer to keep in local space
-                    regularizer += 0.0 * tf.reduce_mean(tf.norm(n, axis = -1))
+                    reg_curr = maxLen[bi]
+                    if reg_curr == None:
+                        reg_curr = 0.0
+                    regularizer += reg_curr * tf.reduce_mean(tf.norm(n, axis = -1))
 
                     # Back to world space
                     n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
@@ -726,12 +769,14 @@ class model_particles:
                     # Bipartite graph
                     if genFeatures:
                         n = nf
+                        n = tf.reshape(n, [self.batch_size, pcnt[bi], -1])
                     else:
                         _, _, gp_idx, gp_edg = bip_kNNG_gen(pos, coarse_pos, knnk[bi], pos_range, name = 'bipggen')
                         n = gconv(coarse_fea, gp_idx, gp_edg, hdim[bi], self.act, True, is_train, 'convt', w_init, b_init)
 
-                    _, gidx, gedg = kNNG_gen(pos, knnk[bi], 3, name = 'ggen')
-                    n = convRes(n, gidx, gedg, nConv[bi], nRes[bi], hdim[bi], self.act, True, is_train, 'resblock', w_init, b_init)
+                    if nConv[bi] > 0:
+                        _, gidx, gedg = kNNG_gen(pos, knnk[bi], 3, name = 'ggen')
+                        n = convRes(n, gidx, gedg, nConv[bi], nRes[bi], hdim[bi], self.act, True, is_train, 'resblock', w_init, b_init)
 
                     coarse_pos = pos
                     coarse_fea = n
@@ -751,14 +796,14 @@ class model_particles:
                 n = autofc(n, output_dim - pos_range, name = 'dec%d/finalLinear' % (blocks - 1))
                 final_particles = tf.concat([pos, n], -1)
 
-            regularizer = regularizer / blocks
+            # regularizer = regularizer / blocks
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
     
     def simulator(self, pos, particles, name = 'Simluator', is_train = True, reuse = False):
 
-        w_init = tf.random_normal_initializer(stddev=self.wdev)
-        w_init_pref = tf.random_normal_initializer(stddev=0.03*self.wdev)
+        w_init = tf.random_normal_initializer(stddev = 0.005 * self.wdev)
+        w_init_pref = tf.random_normal_initializer(stddev = 0.001 * self.wdev)
         b_init = tf.constant_initializer(value=0.0)
 
         with tf.variable_scope(name, reuse = reuse) as vs:
@@ -771,24 +816,31 @@ class model_particles:
 
             if True:
 
+                n = tf.concat([n, pos], axis = -1)
+
                 nn = n
 
                 for i in range(len(layers)):
                     nn = gconv(nn, gIdx, gEdg, layers[i], self.act, True, is_train = is_train, name = 'gconv%d' % i, W_init = w_init, b_init = b_init)
+                    # nn = lnorm(nn, 0.999, is_train, 'gconv%d/norm' % i)
 
                 nn = gconv(nn, gIdx, gEdg, C, self.act, True, is_train = is_train, name = 'gconvLast', W_init = w_init, b_init = b_init)
-            
+                
+                # nn = lnorm(nn, 0.999, is_train, 'gconv%d/norm' % i)
+
             else:
             
+                n = tf.concat([n, pos], axis = -1)
                 nn = bip_kNNGConvLayer_IN(n, gIdx, gEdg, self.act, C, 6, [64], is_train, w_init, b_init, 'gconv0')
                 nn = lnorm(nn, 0.999, is_train, 'gconv0/norm')
             
-            n = n + nn
+            n = n[:, :, :-3] + nn
+            # nn = tf.concat([n, pos], axis = -1)
             
-            pmlp = [128]
+            pmlp = [16]
             for i in range(len(pmlp)):
-                dPos = autofc(n, pmlp[i], tf.nn.elu, name = 'pRefine/mlp%d' % i)
-            dPos = autofc(n, 3, None, name = 'pRefine/mlp_out')
+                nn = autofc(nn, pmlp[i], tf.nn.elu, name = 'pRefine/mlp%d' % i, W_init = w_init_pref)
+            dPos = autofc(nn, 3, None, name = 'pRefine/mlp_out', W_init = w_init_pref)
             # dPos = norm(dPos, 0.999, is_train, 'pRefine/norm')
 
             pos += dPos
@@ -863,7 +915,8 @@ class model_particles:
 
     def build_network(self, is_train, reuse, loopSim = True, includeSim = True):
 
-        normalized_X = self.ph_X / self.normalize
+        normalized_X = (self.ph_X[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
+        # normalized_X = self.ph_X / self.normalize
 
         pos = []
         fea = []
@@ -886,7 +939,8 @@ class model_particles:
 
             if includeSim == True:
                 
-                normalized_Y = self.ph_Y / self.normalize
+                normalized_Y = (self.ph_Y[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
+                # normalized_Y = self.ph_Y / self.normalize
                 posY, feaY, _v, _floss, eY, esamp = self.particleEncoder(normalized_Y, self.particle_latent_dim, is_train = is_train, reuse = True)
 
                 # X => Y
@@ -912,7 +966,8 @@ class model_particles:
                 simLoss = forward_loss + backwrd_loss
 
                 if loopSim == True:
-                    normalized_L = self.ph_Y / self.normalize
+                    normalized_L = (self.ph_L[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
+                    # normalized_L = self.ph_Y / self.normalize
                     posL, feaL, _v, _floss, eY, esamp = self.particleEncoder(normalized_L, self.particle_latent_dim, is_train = is_train, reuse = True)
 
                     # X => L
@@ -993,7 +1048,7 @@ class model_particles:
         rec = rec
         reconstruct_loss = self.chamfer_metric(rec, rec, gt, 3, tf.square, EMD = True)
 
-        return rec * self.normalize, rec_f * self.normalize, reconstruct_loss
+        return rec, rec_f, reconstruct_loss
 
     def build_model(self):
 

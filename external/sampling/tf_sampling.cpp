@@ -8,6 +8,7 @@
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include <cuda_runtime.h>
+#include <iostream>
 
 using namespace tensorflow;
 
@@ -33,7 +34,7 @@ REGISTER_OP("FarthestPointSample")
     ::tensorflow::shape_inference::ShapeHandle dims1; // batch_size * npoint * 3
     c->WithRank(c->input(0), 3, &dims1);
     int npoint;
-    TF_RETURN_IF_ERROR(c->GetAttr("npoint", &npoint));
+	TF_RETURN_IF_ERROR(c->GetAttr("npoint", &npoint));
     ::tensorflow::shape_inference::ShapeHandle output = c->MakeShape({c->Dim(dims1, 0), npoint});
     c->set_output(0, output);
     return Status::OK();
