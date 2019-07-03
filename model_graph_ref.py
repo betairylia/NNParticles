@@ -242,6 +242,27 @@ def bip_kNNGConvLayer_kernel(inputs, kNNIdx, kNNEdg, act, channels, filters, fCh
         
         return n
 
+def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name):
+    
+    with tf.variable_scope(name):
+
+        bs = inputs.shape[0]
+        Ni = inputs.shape[1]
+        Ci = inputs.shape[2]
+
+        ### Do the convolution ###
+        mlp = mlp
+        n = inputs
+        for i in range(len(mlp)):
+            n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i)
+            n = norm(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
+            n = tf.nn.leaky_relu(n)
+            # n = tf.nn.elu(n)
+
+        n = autofc(n, channels * fCh, None, name = 'kernel/mlp_out')
+
+    return n # [bs, channels * fCh]
+
 def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name, nnnorm):
     
     with tf.variable_scope(name):
@@ -694,6 +715,19 @@ class model_particles:
 
             return gPos, n, var_list, freq_loss, pool_eval_func, edg_sample, gt_density
     
+    def getKernelEmbeddings(self, input_particle, channels, fCh, mlp, layer_name):
+
+        is_train = False
+
+        # default values
+        if mlp == None:
+            mlp = [channels * 2, channels * 2]
+        if fCh == None:
+            fCh = 2
+
+        with tf.variable_scope("ParticleEncoder", reuse = True) as vs:
+            return bip_kNNGConvLayer_feature_getKernel(input_particle, channels, fCh, mlp, layer_name)
+
     def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, begin_block = 0, is_train = False, reuse = False):
 
         w_init = tf.random_normal_initializer(     stddev = 0.01 * self.wdev)
