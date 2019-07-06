@@ -14,7 +14,7 @@ from termcolor import colored, cprint
 
 import model_graph_ref as model
 from model_graph_ref import model_particles as model_net
-from config_graph_ref import config
+from config_graph_ref import config as model_config
 
 # import model_graph as model
 # from model_graph import model_particles as model_net
@@ -171,30 +171,36 @@ elif args.load != "None":
     saver.restore(sess, args.load)
 
 # prepare data
-grid_count = 64
-grid_size  = 1.0
+grid_count = 32
+grid_size  = 0.8
 grid_lspc = np.linspace(-grid_size, grid_size, grid_count)
 gX, gY, gZ = np.meshgrid(grid_lspc, grid_lspc, grid_lspc)
-grid_data = np.concatenate((gX, gY, gZ), axis = -1)
+grid_data = np.stack((gX, gY, gZ), axis = -1)
 grid_data = np.reshape(grid_data, (-1, 3))
 
-channels = config['encoder']['channels'][1]
+channels = model_config['encoder']['channels'][1]
 bs = 2048
 
 fCh = 2
-ph = tf.placeholder(args.dtype, [-1, 3])
+ph = tf.placeholder(args.dtype, [bs, 3])
 _kernel = model.getKernelEmbeddings(ph, channels, fCh, None, 'net/ParticleEncoder/enc1/gpool/gconv/gconv')
 totalCnt = grid_count ** 3
 
-result_kernel = np.zeros((totalCnt, channels * fCh))
+result_kernel = np.zeros((totalCnt, channels * fCh), np.float16)
+batch_feed = np.zeros((bs, 3))
 
 for bid in range(math.ceil(totalCnt / bs)):
+
+    print("%8d / %8d" % (bid * bs, totalCnt))
+
     batch_start = bid * bs
     batch_end   = (bid + 1) * bs
     batch_end   = min(batch_end, totalCnt)
 
-    _res = sess.run(_kernel, feed_dict = {ph: grid_data[batch_start:batch_end, :]})
-    result_kernel[batch_start:batch_end, :] = _res
+    batch_feed[:, :] = 0
+    batch_feed[0:batch_end - batch_start, :] = grid_data[batch_start:batch_end, :]
+    _res = sess.run(_kernel, feed_dict = {ph: batch_feed})
+    result_kernel[batch_start:batch_end, :] = _res[0:batch_end - batch_start, :]
 
 result_kernel = np.reshape(result_kernel, (grid_count, grid_count, grid_count, channels * fCh))
-np.save(result_kernel, 'kernel_visualization/%s.npy' % args.name)
+np.save('kernel_visualization/%s.npy' % args.name, result_kernel)

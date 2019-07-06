@@ -410,7 +410,7 @@ config_dict = {
         'encoder': {
             'blocks' : 2,
             'particles_count' : [2048, 32],
-            'conv_count' : [2, 0],
+            'conv_count' : [0, 0],
             'res_count' : [0, 1],
             'kernel_size' : [k, k],
             'bik' : [0, 128],
@@ -867,4 +867,4 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_newRegular_512d_AdaIN']
+config = config_dict['2048_ultraShallow_512d_AdaIN']

@@ -246,9 +246,11 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name):
     
     with tf.variable_scope(name):
 
-        bs = inputs.shape[0]
-        Ni = inputs.shape[1]
-        Ci = inputs.shape[2]
+        # bs = inputs.shape[0]
+        # Ni = inputs.shape[1]
+        # Ci = inputs.shape[2]
+
+        is_train = False
 
         ### Do the convolution ###
         mlp = mlp
@@ -725,8 +727,8 @@ class model_particles:
         if fCh == None:
             fCh = 2
 
-        with tf.variable_scope("ParticleEncoder", reuse = True) as vs:
-            return bip_kNNGConvLayer_feature_getKernel(input_particle, channels, fCh, mlp, layer_name)
+        with tf.variable_scope(layer_name.split('/')[0], reuse = True) as vs:
+            return bip_kNNGConvLayer_feature_getKernel(input_particle, channels, fCh, mlp, '/'.join(layer_name.split('/')[1:]))
 
     def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, begin_block = 0, is_train = False, reuse = False):
 

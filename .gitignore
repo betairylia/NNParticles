@@ -132,3 +132,4 @@ Sim_Reconstruction/
 *.swp
 .vscode/
 previews/
+kernel_visualization/
