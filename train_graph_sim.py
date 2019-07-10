@@ -219,6 +219,12 @@ stepFactor = 9
 
 epochs = dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim)
 
+_vr = model.val_rec[0, :, :]
+_vg = model.val_gt[0, :, :]
+_es = model.edge_sample[0]
+
+sess.graph.finalize()
+
 while True:
     batch_train, batch_validate = next(epochs, [None, None])
     epoch_idx += 1
@@ -259,7 +265,7 @@ while True:
         feed_dict = { model.ph_X: _vx[0], model.ph_Y: _vx[1], model.ph_L: _vx[2], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
         
         if batch_idx_test % 200 == 0:
-            n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
+            n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, _vr, _vg], feed_dict = feed_dict)
             
             val_writer.add_summary(summary, batch_idx_test)
             # val_writer.add_summary(summary_2, batch_idx_test)
