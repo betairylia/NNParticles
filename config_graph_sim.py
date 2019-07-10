@@ -236,4 +236,4 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_newRegular_64c_AdaIN']
+config = config_dict['2048_newRegular_64c_GRU_AdaIN']
