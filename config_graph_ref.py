@@ -1,7 +1,7 @@
 
 vSize = 5120
-ccnt = 32
-cdim = 13
+ccnt = 16
+cdim = 29
 hd = 64
 ld = 128
 k = 16
@@ -116,7 +116,7 @@ config_dict = {
         'useVector': False,
         'encoder': {
             'blocks' : 3,
-            'particles_count' : [2048, 512, 32],
+            'particles_count' : [2048, 512, ccnt],
             'conv_count' : [2, 0, 0],
             'res_count' : [0, 2, 3],
             'kernel_size' : [k, k, k],
@@ -131,8 +131,8 @@ config_dict = {
             'nConv' : [0],
             'nRes' : [0],
             'hdim' : [hd // 3],
-            'fdim' : [ld], # dim of features used for folding
-            'gen_hdim' : [ld],
+            'fdim' : [512], # dim of features used for folding
+            'gen_hdim' : [512],
             'knnk' : [k // 2],
             'genStruct' : 'AdaIN',
             'genFeatures' : True,
@@ -867,4 +867,4 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_ultraShallow_512d_AdaIN']
+config = config_dict['2048_newRegular_512d_AdaIN']

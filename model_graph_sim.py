@@ -814,7 +814,9 @@ class model_particles:
             Np = particles.shape[1]
             C = particles.shape[2]
 
-            if True:
+            
+
+            if False:
 
                 n = tf.concat([n, pos], axis = -1)
 
@@ -832,14 +834,14 @@ class model_particles:
             
                 n = tf.concat([n, pos], axis = -1)
                 nn = bip_kNNGConvLayer_IN(n, gIdx, gEdg, self.act, C, 6, [64], is_train, w_init, b_init, 'gconv0')
-                nn = lnorm(nn, 0.999, is_train, 'gconv0/norm')
+                # nn = lnorm(nn, 0.999, is_train, 'gconv0/norm')
             
             n = n[:, :, :-3] + nn
             # nn = tf.concat([n, pos], axis = -1)
             
             pmlp = [16]
             for i in range(len(pmlp)):
-                nn = autofc(nn, pmlp[i], tf.nn.elu, name = 'pRefine/mlp%d' % i, W_init = w_init_pref)
+                nn = autofc(nn, pmlp[i], self.act, name = 'pRefine/mlp%d' % i, W_init = w_init_pref)
             dPos = autofc(nn, 3, None, name = 'pRefine/mlp_out', W_init = w_init_pref)
             # dPos = norm(dPos, 0.999, is_train, 'pRefine/norm')
 
@@ -935,7 +937,7 @@ class model_particles:
             
             AE_REC_loss = self.chamfer_metric(rec_X, rec_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
 
-            loss = AE_REC_loss
+            loss = 0
 
             if includeSim == True:
                 
@@ -953,14 +955,17 @@ class model_particles:
                 _, [rec_sim_X, _, _], _, r, meta = self.particleDecoder(psimX, fsimX, self.ph_card, outDim, is_train = is_train, reuse = True)
                 _, [rec_sim_Y, _, _], _, r, meta = self.particleDecoder(psimY, fsimY, self.ph_card, outDim, is_train = is_train, reuse = True)
 
-                # forward_loss = self.chamfer_metric(rec_sim_X, rec_sim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
-                # backwrd_loss = self.chamfer_metric(rec_sim_Y, rec_sim_Y, normalized_Y[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                forward_AE_loss = self.chamfer_metric(rec_sim_X, rec_sim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                backwrd_AE_loss = self.chamfer_metric(rec_sim_Y, rec_sim_Y, normalized_Y[:, :, 0:outDim], 3, self.loss_func, EMD = True)
                 backwrd_loss = self.chamfer_metric(tf.concat([psimX, fsimX], axis = -1), tf.concat([psimX, fsimX], axis = -1), tf.concat([posX, feaX], axis = -1), 3, self.loss_func, EMD = True)
                 forward_loss = self.chamfer_metric(tf.concat([psimY, fsimY], axis = -1), tf.concat([psimY, fsimY], axis = -1), tf.concat([posY, feaY], axis = -1), 3, self.loss_func, EMD = True)
-                
+
+                AE_REC_loss += forward_AE_loss + backwrd_AE_loss
+
                 if loopSim == True:
-                    backwrd_loss = 0
-                    forward_loss = 0
+                    # backwrd_loss = 0
+                    # forward_loss = 0
+                    pass
 
                 loss += forward_loss + backwrd_loss
                 simLoss = forward_loss + backwrd_loss
@@ -988,11 +993,14 @@ class model_particles:
 
                     backwrd_l_loss = self.chamfer_metric(tf.concat([plsimX, flsimX], axis = -1), tf.concat([plsimX, flsimX], axis = -1), tf.concat([posX, feaX], axis = -1), 3, self.loss_func, EMD = True)
                     forward_l_loss = self.chamfer_metric(tf.concat([plsimL, flsimL], axis = -1), tf.concat([plsimL, flsimL], axis = -1), tf.concat([posL, feaL], axis = -1), 3, self.loss_func, EMD = True)
-                    # forward_l_loss = self.chamfer_metric(rec_lsim_X, rec_lsim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
-                    # backwrd_l_loss = self.chamfer_metric(rec_lsim_L, rec_lsim_L, normalized_L[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                    forward_AE_l_loss = self.chamfer_metric(rec_lsim_X, rec_lsim_X, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                    backwrd_AE_l_loss = self.chamfer_metric(rec_lsim_L, rec_lsim_L, normalized_L[:, :, 0:outDim], 3, self.loss_func, EMD = True)
             
+                    AE_REC_loss += forward_AE_l_loss + backwrd_AE_l_loss
                     loss += forward_l_loss + backwrd_l_loss
                     lsimLoss = forward_l_loss + backwrd_l_loss
+
+            loss += AE_REC_loss
             
             if is_train == True:
                 rec = rec_X

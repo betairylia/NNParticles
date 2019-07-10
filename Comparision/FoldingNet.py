@@ -351,14 +351,14 @@ class model_particles:
             inputs = tf.concat([inputs, latent], axis = -1)
             n = inputs
 
-            n = autofc(n, 128, tf.nn.relu, True, 'pfc1')
-            n = autofc(n, 128, tf.nn.relu, True, 'pfc2')
+            n = autofc(n, 512, tf.nn.relu, True, 'pfc1')
+            n = autofc(n, 512, tf.nn.relu, True, 'pfc2')
             n = autofc(n, output_dim, None, True, 'pfc3')
 
             n = tf.concat([n, latent], axis = -1)
 
-            n = autofc(n, 128, tf.nn.relu, True, 'pfc4')
-            n = autofc(n, 128, tf.nn.relu, True, 'pfc5')
+            n = autofc(n, 512, tf.nn.relu, True, 'pfc4')
+            n = autofc(n, 512, tf.nn.relu, True, 'pfc5')
             n = autofc(n, output_dim, None, True, 'pfc6')
 
             n, _ = kNNGPooling_rand(n, n, groundTruth_card, bs, N, name = 'randomSelection')

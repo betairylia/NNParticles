@@ -30,6 +30,8 @@ from tensorflow.python import debug as tf_debug
 from tensorflow.python.client import timeline
 from tensorflow.contrib.tensorboard.plugins import projector
 
+import gc
+
 parser = argparse.ArgumentParser(description="Run the NN for particle simulation")
 
 parser.add_argument('datapath')
@@ -223,7 +225,18 @@ stepFactor = 9
 
 epochs = dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim)
 
+_vr = model.val_rec[0, :, :]
+_vg = model.val_gt[0, :, :]
+_es = model.edge_sample[0]
+
+sess.graph.finalize()
+
 while True:
+    
+    print("gc.garbage:")
+    print(gc.garbage)
+    del gc.garbage[:]
+    
     batch_train, batch_validate = next(epochs, [None, None])
     epoch_idx += 1
 
@@ -267,9 +280,9 @@ while True:
         
         if batch_idx_test % 100 == 0:
             if model.edge_sample is not None:
-                n_loss, summary, _rec, _gt, esamp = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :], model.edge_sample[0]], feed_dict = feed_dict)
+                n_loss, summary, _rec, _gt, esamp = sess.run([model.val_particleLoss, merged_val, _vr, _vg, _es], feed_dict = feed_dict)
             else:
-                n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
+                n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, _vr, _vg], feed_dict = feed_dict)
             
             val_writer.add_summary(summary, batch_idx_test)
             # val_writer.add_summary(summary_2, batch_idx_test)

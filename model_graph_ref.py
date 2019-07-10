@@ -20,11 +20,15 @@ from time import gmtime, strftime
 from external.structural_losses.tf_approxmatch import approx_match, match_cost
 from external.sampling.tf_sampling import farthest_point_sample, prob_sample
 
+import ot
+import ot.gpu
+from Sinkhorn_wrapper import Sinkhorn_dist
+
 default_dtype = tf.float32
 summary_scope = None
 SN = False
 
-nearestNorm = True
+nearestNorm = False
 PDFNorm = False
 
 PDFNorm = PDFNorm and not nearestNorm
@@ -938,7 +942,7 @@ class model_particles:
                     # regularizer to keep in local space
                     reg_curr = maxLen[bi]
                     if reg_curr == None:
-                        reg_curr = 0.2
+                        reg_curr = 0.01
                     regularizer += reg_curr * tf.reduce_mean(tf.norm(n, axis = -1))
 
                     # Back to world space
@@ -996,9 +1000,31 @@ class model_particles:
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
-    def chamfer_metric(self, particles, particles_ref, groundtruth, pos_range, loss_func, EMD = False):
+    def chamfer_metric(self, particles, particles_ref, groundtruth, pos_range, loss_func, EMD = False, Sinkhorn = False):
         
-        if EMD == True:
+        if Sinkhorn == True:
+
+            bs = groundtruth.shape[0]
+            Np = particles.shape[1]
+            Ng = groundtruth.shape[1]
+
+            # NOTE: current using position (0:3) only here for searching nearest point.
+            row_predicted = tf.reshape(particles_ref[:, :, 0:pos_range], [bs, Np, 1, pos_range])
+            col_groundtru = tf.reshape(  groundtruth[:, :, 0:pos_range], [bs, 1, Ng, pos_range])
+            # distance = tf.norm(row_predicted - col_groundtru, ord = 'euclidean', axis = -1)
+            distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
+
+            _a = tf.ones([bs, Np], tf.float32)
+            _b = tf.ones([bs, Ng], tf.float32)
+
+            _a /= config['decoder']['pcnt'][len(config['decoder']['pcnt']) - 1]
+            _b /= config['decoder']['pcnt'][len(config['decoder']['pcnt']) - 1]
+
+            transport_mat = tf.py_func(Sinkhorn_dist, [particles_ref, groundtruth, _a, _b, distance], tf.float32)
+            distance_loss = distance * transport_mat
+            distance_loss = tf.reduce_sum(distance_loss)
+
+        elif EMD == True:
             
             bs = groundtruth.shape[0]
             Np = particles.shape[1]
@@ -1112,6 +1138,7 @@ class model_particles:
                     vls.append(vs)
 
                     recLoss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, self.loss_func, EMD = True)
+                    # recLoss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, self.loss_func, Sinkhorn = True)
                     recLoss += r
 
                     rec_X = rec_X * tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
@@ -1130,7 +1157,11 @@ class model_particles:
                 rec = rec * tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
 
         print(gtd)
-        return rec, tf.concat([self.ph_X[:, :, 0:outDim], tf.reshape(gtd, [self.batch_size, self.gridMaxSize, 1])], axis = -1), loss, vls, meta, esamp
+        if gtd is not None:
+            gt_w_d = tf.concat([self.ph_X[:, :, 0:outDim], tf.reshape(gtd, [self.batch_size, self.gridMaxSize, 1])], axis = -1),
+        else:
+            gt_w_d = self.ph_X[:, :, 0:outDim]
+        return rec, gt_w_d, loss, vls, meta, esamp
 
     # Only encodes X
     def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
