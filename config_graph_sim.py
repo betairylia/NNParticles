@@ -1,7 +1,7 @@
 
 vSize = 5120
 ccnt = 64
-cdim = 32
+cdim = 64
 # ccnt = 512
 # cdim = 4
 hd = 64
@@ -163,6 +163,43 @@ config_dict = {
         'simulator': {
             'knnk': k,
             'layers': [256],
+            'GRU': False,
+            'IN': True,
+            'GRU_hd': 256,
+        },
+        'stages': [[0, 0]]
+    },
+    '2048_newRegular_64c_GRU_AdaIN': {
+        'useVector': False,
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [2048, 512, 64],
+            'conv_count' : [2, 0, 0],
+            'res_count' : [0, 2, 3],
+            'kernel_size' : [k, k, k],
+            'bik' : [0, 48, 96],
+            'channels' : [hd // 2, hd * 2, max(ld, hd * 4)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [2048], # particle count
+            'generator' : [5], # Generator depth
+            'maxLen' : [0.05],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [hd // 3],
+            'fdim' : [ld], # dim of features used for folding
+            'gen_hdim' : [ld],
+            'knnk' : [k // 2],
+            'genStruct' : 'AdaIN',
+            'genFeatures' : True,
+        },
+        'simulator': {
+            'knnk': k,
+            'layers': [256],
+            'GRU': True,
+            'IN': False,
+            'GRU_hd': 256,
         },
         'stages': [[0, 0]]
     },
@@ -199,4 +236,4 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_ultraShallow_AdaIN']
+config = config_dict['2048_newRegular_64c_AdaIN']
