@@ -862,6 +862,7 @@ class model_particles:
 
                 hidden_dim_GRU = config['simulator']['GRU_hd']
 
+                n = autofc(next_hidden, hidden_dim_GRU - 3, None, False, 'GRU_inFC')
                 n = tf.concat([n, pos], axis = -1)
 
                 # GRU
@@ -887,7 +888,7 @@ class model_particles:
                     nxt_hid_input   = bip_kNNGConvLayer_IN(res_gate * n, gIdx, gEdg, None, hidden_dim_GRU, 2, [hidden_dim_GRU], is_train, w_init, b_init, 'nh_inp')
                     next_hidden = (1 - upd_gate) * n + upd_gate * (tf.nn.tanh( nxt_hid_input))
 
-                n = next_hidden
+                n = autofc(next_hidden, hidden_dim_GRU - 3, None, False, 'GRU_outFC')
 
             else:
 
