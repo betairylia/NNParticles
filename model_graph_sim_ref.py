@@ -844,7 +844,7 @@ class model_particles:
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
     
-    def simulator(self, pos, particles, name = 'Simluator', is_train = True, reuse = False, hidden_state = None):
+    def simulator(self, pos, particles, name = 'Simluator', is_train = True, reuse = False):
 
         w_init = tf.random_normal_initializer(stddev = 0.005 * self.wdev)
         w_init_pref = tf.random_normal_initializer(stddev = 0.001 * self.wdev)
@@ -861,9 +861,6 @@ class model_particles:
             if config['simulator']['GRU'] == True:
 
                 hidden_dim_GRU = config['simulator']['GRU_hd']
-
-                if hidden_state == None:
-                    hidden_state = tf.zeros([self.batch_size, Np, hidden_dim_GRU], default_dtype)
 
                 n = tf.concat([n, pos], axis = -1)
 

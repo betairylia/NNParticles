@@ -1,7 +1,7 @@
 
 vSize = 5120
 ccnt = 64
-cdim = 64
+cdim = 256
 # ccnt = 512
 # cdim = 4
 hd = 64
@@ -236,4 +236,4 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_newRegular_64c_AdaIN']
+config = config_dict['2048_newRegular_64c_GRU_AdaIN']
