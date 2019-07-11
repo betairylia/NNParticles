@@ -1,6 +1,6 @@
 
 vSize = 5120
-ccnt = 64
+ccnt = 32
 cdim = 256
 # ccnt = 512
 # cdim = 4
@@ -139,7 +139,7 @@ config_dict = {
         'useVector': False,
         'encoder': {
             'blocks' : 3,
-            'particles_count' : [2048, 512, 64],
+            'particles_count' : [2048, 512, ccnt],
             'conv_count' : [2, 0, 0],
             'res_count' : [0, 2, 3],
             'kernel_size' : [k, k, k],
@@ -173,7 +173,7 @@ config_dict = {
         'useVector': False,
         'encoder': {
             'blocks' : 3,
-            'particles_count' : [2048, 512, 64],
+            'particles_count' : [2048, 512, ccnt],
             'conv_count' : [2, 0, 0],
             'res_count' : [0, 2, 3],
             'kernel_size' : [k, k, k],
@@ -236,4 +236,5 @@ config_dict = {
     },
 }
 
-config = config_dict['2048_newRegular_64c_GRU_AdaIN']
+config = config_dict['2048_newRegular_64c_AdaIN']
+

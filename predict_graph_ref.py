@@ -12,8 +12,8 @@ import os
 
 from termcolor import colored, cprint
 
-import model_graph_sim_ref as model
-from model_graph_sim_ref import model_particles as model_net
+import model_graph_ref as model
+from model_graph_ref import model_particles as model_net
 # import dataLoad_particleTest as dataLoad                        # Legacy method, strongly disagree with i.i.d. distribution among batch(epoch)es.
 import dataLoad_graph as dataLoad            # New method, shuffle & mixed randomly
 
@@ -27,6 +27,7 @@ parser = argparse.ArgumentParser(description="Run the NN for particle simulation
 
 
 parser.add_argument('datapath')
+parser.add_argument('outpath')
 parser.add_argument('-gpu', '--cuda-gpus')
 
 parser.add_argument('-ep', '--epochs', type = int, default = 20)
@@ -62,6 +63,8 @@ parser.add_argument('-load', '--load', type = str, default = "None", help = "Fil
 parser.add_argument('-debug', '--debug', dest = "enable_debug", action = 'store_const', default = False, const = True, help = "Enable debugging")
 parser.add_argument('-prof', '--profile', dest = "profile", action = 'store_const', default = False, const = True, help = "Enable profiling (at step 10)")
 # parser.add_argument('-prof', '--profile', type = str, default = "None", help = "Path to store profiling timeline (at step 100)")
+
+parser.add_argument('-latent', '--latent-code', dest = 'latent_code', action='store_const', default = False, const = True, help = "Store latent code instead of reconstruction results")
 
 args = parser.parse_args()
 
@@ -141,22 +144,9 @@ model.initial_grid_size = model.total_world_size / 16
 # normalized_X = model.ph_X / args.normalize
 # normalized_Y = model.ph_Y / args.normalize
 
-pRange = 3
+pEnc, fEnc, gtNorm = model.build_predict_Enc(is_train = False, reuse = False)
+rec, rLoss = model.build_predict_Dec(pEnc, fEnc, gtNorm, is_train = False, reuse = False, outDim = args.output_dim)
 outDim = args.output_dim
-normalized_X = (model.ph_X[:, :, 0:outDim] - tf.broadcast_to(normalize['mean'], [args.batch_size, args.voxel_size, outDim])) / tf.broadcast_to(normalize['std'], [args.batch_size, args.voxel_size, outDim])
-normalized_Y = (model.ph_Y[:, :, 0:outDim] - tf.broadcast_to(normalize['mean'], [args.batch_size, args.voxel_size, outDim])) / tf.broadcast_to(normalize['std'], [args.batch_size, args.voxel_size, outDim])
-
-cpos, cfea, poolX, evalsX = model.build_predict_Enc(normalized_X, True, False)
-if args.dosim:
-    cpos_Y, cfea_Y, poolY, evalsY = model.build_predict_Enc(normalized_Y, False, True)
-
-ph_cpos = tf.placeholder(args.dtype, [args.batch_size, args.cluster_count, pRange])
-ph_cfea = tf.placeholder(args.dtype, [args.batch_size, args.cluster_count, args.cluster_dim])
-if args.dosim:
-    spos, sfea = model.build_predict_Sim(ph_cpos, ph_cfea, False, False)
-prec, precf, ___l = model.build_predict_Dec(ph_cpos, ph_cfea, normalized_X[:, :, 0:outDim], True, False,  outDim = outDim)
-if args.dosim:
-    rec , recf, loss = model.build_predict_Dec(   spos,    sfea, normalized_Y[:, :, 0:outDim], False, True, outDim = outDim)
 
 # Create session
 sess = tf.Session()
@@ -180,11 +170,6 @@ if not os.path.exists(save_path):
 # Save & Load
 saver = tf.train.Saver()
 
-# You should load a trained model
-# sess.run(tf.local_variables_initializer())
-# # tl.layers.initialize_global_variables(sess)
-# sess.run(tf.global_variables_initializer())
-
 if args.load == "auto" or args.load == "Auto":
     latest_ckpt = tf.train.latest_checkpoint(save_path)
     if latest_ckpt is not None:
@@ -193,9 +178,7 @@ if args.load == "auto" or args.load == "Auto":
 elif args.load != "None":
     saver.restore(sess, args.load)
 
-batch_idx_train = 0
-batch_idx_test = 0
-
+batch_idx = 0
 epoch_idx = 0
 iteration = 0
 
@@ -203,135 +186,39 @@ maxl_array = np.zeros((2))
 maxl_array[0] = args.voxel_size
 maxl_array[1] = args.voxel_size
 
-epCount = dataLoad.fileCount(args.datapath)
-stepFactor = 9
-
 bs = args.batch_size
 N = args.voxel_size
-totalIterations = 200
 
-groundTruth = np.zeros((totalIterations * bs, N, outDim))
-groundTrutX = np.zeros((totalIterations * bs, N, outDim))
-reconstruct = np.zeros((totalIterations * bs, N, outDim))
-# fold        = np.zeros((totalIterations * bs, N, outDim))
+sess.graph.finalize()
 
-# clusters_X  = np.zeros((totalIterations * bs, args.cluster_count, pRange))
-# clusters_Y  = np.zeros((totalIterations * bs, args.cluster_count, pRange))
-
-totalIterations -= 1
-
-# pgt = tf.placeholder('float32', [8, N, pRange])
-# prc = tf.placeholder('float32', [8, N, pRange])
-# pl = model.chamfer_metric(pgt / args.normalize, prc / args.normalize, pRange, tf.abs) * 40.0
-
-# pools = [np.zeros((totalIterations * bs, model.pCount[i+1], pRange)) for i in range(model.pool_count)]
-# evals = [np.zeros((totalIterations * bs, model.pCount[i]  , pRange + 1)) for i in range(model.pool_count)]
-
-for epoch_train, epoch_validate in dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, False, args.output_dim):
+for epoch_test, outFileName, outFileShape in dataLoad.gen_epochs_predict(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, args.output_dim):
 
     epoch_idx += 1
     print(colored("Epoch %03d" % (epoch_idx), 'yellow'))
 
     # Train
     ecnt = 0
-    for _x, _x_size in epoch_train:
+    epoch_results = []
+    for _x, _x_size in epoch_test:
 
-        # print(args.dosim)
+        batch_idx += 1
 
-        # Initial batch - compute latent clusters
-        if ecnt == 0 and args.dosim:
-            _cpos, _cfea, _gtX = sess.run([cpos, cfea, normalized_X], feed_dict = { model.ph_X: _x[0] })
-            _spos, _sfea = _cpos, _cfea
-            _rec, n_loss = sess.run([prec, ___l], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
+        if args.latent_code == True:
 
-            groundTruth[0, :, :] = _gtX[:, :, 0:outDim]
-            reconstruct[0, :, :] = _rec[:, :, 0:outDim]
-            batch_idx_train += 1
-            
-            print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
+            _penc, _fenc = sess.run([pEnc, fEnc], feed_dict = { model.ph_X: _x[0] })
+            out_result = np.concatenate((_penc, _fenc), axis = -1)
 
-        ecnt += 1
+            print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored(" Test Iteration %08d" % batch_idx, 'magenta'))
         
-        if args.dosim:
-            # Simulation
-            _spos, _sfea, _rec, n_loss, _gtX, _gtY = sess.run([spos, sfea, rec, loss, normalized_X, normalized_Y], feed_dict = { ph_cpos: _spos, ph_cfea: _sfea, model.ph_card: _x_size, model.ph_Y: _x[1], model.ph_max_length: maxl_array, model.ph_X: _x[0] })
-            
-            # Get encoded features & clusters
-            # _cpos_x, _cfea_x = sess.run([  cpos,   cfea], feed_dict = { model.ph_X: _x[0] })
-            # _cpos_y, _cfea_y = sess.run([cpos_Y, cfea_Y], feed_dict = { model.ph_Y: _x[1] })
         else:
-            # Just do auto-encoder
-            _cpos, _cfea, pX, _gtX = sess.run([cpos, cfea, poolX, normalized_X], feed_dict = {model.ph_X: _x[0]})
-            # print(_cfea)
-            _rec, _recf, n_loss = sess.run([prec, precf, ___l], feed_dict = { ph_cpos: _cpos, ph_cfea: _cfea, model.ph_card: _x_size, model.ph_X: _x[0], model.ph_max_length: maxl_array })
 
-        sidx = batch_idx_train * bs
-        eidx = (batch_idx_train + 1) * bs
-        batch_idx_train += 1
+            _prec, _loss = sess.run([rec, rLoss], feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array })
+            out_result = _prec
 
-        print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("   Train   It %08d" % batch_idx_train, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
+            print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored(" Test Iteration %08d" % batch_idx, 'magenta') + ' - ' + colored(" Loss = %03.4f" % _loss, 'green'))
 
-        groundTrutX[sidx:eidx, :, :] = _gtX[:, :, 0:outDim]
-        if args.dosim:
-            groundTruth[sidx:eidx, :, :] = _gtY[:, :, 0:outDim]
-        reconstruct[sidx:eidx, :, :] = _rec[:, :, 0:outDim]
-        # fold[sidx:eidx, :, :] = _recf[:, :, 0:outDim]
-
-        if not args.dosim:
-            for i in range(len(pX)):
-                pass
-                # pools[i][sidx:eidx] = pX[i]
-                # evals[i][sidx:eidx] = eX[i]
-
-        # if args.dosim:
-            # clusters_X[ sidx:eidx, :, :] = _cpos_x[:, :, 0:pRange] * 48.0
-            # clusters_Y[ sidx:eidx, :, :] = _cpos_y[:, :, 0:pRange] * 48.0
-        # else:
-            # clusters_X[ sidx:eidx, :, :] = _cpos[:, :, 0:pRange] * args.normalize
-
-        if batch_idx_train >= (totalIterations + 1):
-            break
-
-    # Test
-    # for _x, _x_size in epoch_validate:
-    #     feed_dict = { model.ph_X: _x, model.ph_card: _x_size, model.ph_max_length: maxl_array }
-    #     n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
-    #     val_writer.add_summary(summary, round(batch_idx_test * stepFactor))
-    #     batch_idx_test += 1
-
-    #     print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("Validation It %08d" % batch_idx_test, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
-
-outpath = os.path.join('MDSets/results/fluids', args.name)
-
-if not os.path.exists(outpath):
-    os.makedirs(outpath)
-
-np.save(os.path.join(outpath, 'rc.npy'), reconstruct)
-# np.save(os.path.join(outpath, 'rf.npy'), fold)
-np.save(os.path.join(outpath, 'gX.npy'), groundTrutX)
-# if args.dosim:
-    # np.save(os.path.join(outpath, 'eX.npy'), eX[0])
-# else:
-    # for i in range(len(pools)):
-        # np.save(os.path.join(outpath, 'p%d.npy' % i), pools[i])
-        # np.save(os.path.join(outpath, 'e%d.npy' % i), evals[i])
-# np.save(os.path.join(outpath, 'cX.npy'), clusters_X)
-
-if args.dosim:
-    np.save(os.path.join(outpath, 'gt.npy'), groundTruth)
-    # np.save(os.path.join(outpath, 'cY.npy'), clusters_Y)
-
-# Generate CC ASC files
-if outDim > 3:
-    with open(os.path.join(outpath, 'gt.asc'), 'w') as fgt:
-        for i in range(N):
-            fgt.write("%f %f %f %f %f %f\n" % (groundTruth[0, i, 0], groundTruth[0, i, 1], groundTruth[0, i, 2], groundTruth[0, i, 3], groundTruth[0, i, 4], groundTruth[0, i, 5]))
-
-    with open(os.path.join(outpath, 'rc.asc'), 'w') as fgt:
-        for i in range(N):
-            fgt.write("%f %f %f %f %f %f\n" % (reconstruct[0, i, 0], reconstruct[0, i, 1], reconstruct[0, i, 2], reconstruct[0, i, 3], reconstruct[0, i, 4], reconstruct[0, i, 5]))
-
-# print("Loss check")
-# print(sess.run(pl, feed_dict = {pgt: groundTrutX[0:8], prc: reconstruct[0:8]}))
-# print(reconstruct)
-
+        epoch_results.append(out_result)
+    
+    print("Writing file for Ep %04d ... " % epoch_idx)
+    final_result = np.concatenate(epoch_results, axis = 0)
+    np.save(os.path.join(args.outpath, outFileName), final_result)
