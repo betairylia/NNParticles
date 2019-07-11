@@ -223,12 +223,12 @@ def gen_epochs(n_epochs, path, batch_size, vM, shuffle = True, dim = 0):
             else:
                 data_new = np.zeros((data_val.shape[0], data_val.shape[1], maxParticlesPerGrid, data_val.shape[3]))
 
-            for i in range(data_val.shape[0]):
+            for ii in range(data_val.shape[0]):
                 if data_val.ndim == 3:
-                    data_new[i] = np.random.permutation(data_val[i])[:maxParticlesPerGrid]
+                    data_new[ii] = np.random.permutation(data_val[ii])[:maxParticlesPerGrid]
                 else:
                     for j in range(data_val.shape[1]):
-                        data_new[i, j] = np.random.permutation(data_val[i, j])[:maxParticlesPerGrid]
+                        data_new[ii, j] = np.random.permutation(data_val[ii, j])[:maxParticlesPerGrid]
 
             del data_val
             data_val = data_new
