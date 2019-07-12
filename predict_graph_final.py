@@ -36,6 +36,7 @@ import gc
 parser = argparse.ArgumentParser(description="Run the NN for particle simulation")
 
 parser.add_argument('datapath')
+parser.add_argument('outpath')
 parser.add_argument('-gpu', '--cuda-gpus')
 
 parser.add_argument('-ep', '--epochs', type = int, default = 80)
