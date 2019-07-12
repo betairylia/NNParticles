@@ -79,7 +79,7 @@ parser.add_argument('-loss', '--loss-metric', type = str, default = "EMDUB", hel
 parser.add_argument('-cgen', '--conditional-generator', type = str, default = "AdaIN", help = "AdaIN, concat, final_selection")
 parser.add_argument('-modelnorm', '--model-norm', type = str, default = "None", help = "None, BrN, LN, IN")
 parser.add_argument('-maxpconv', '--max-pool-conv', dest = "max_pool_conv", action = 'store_const', default = False, const = True, help = 'Enable max pool conv instead of mean (sum)')
-parser.add_argument('-density'. '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
+parser.add_argument('-density', '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
 
 args = parser.parse_args()
 
@@ -133,12 +133,12 @@ elif args.config != 'None':
         model_config = json.load(jsonFile)
 
 if model_config == None:
-    model_config = 
+    model_config =\
     {
         'useVector': False,                             # pending
         'conv': args.conv,                              # pending
-        'convd': args.convd,                            # OK
-        'loss': args.loss,                              # OK
+        'convd': args.conv_dim,                            # OK
+        'loss': args.loss_metric,                              # OK
         'maxpoolconv': args.max_pool_conv,              # OK
         'density_estimate': args.density_estimation,    # pending
         'normalization': args.model_norm,               # OK
@@ -162,7 +162,7 @@ if model_config == None:
             'fdim' : [512], # dim of features used for folding
             'gen_hdim' : [512],
             'knnk' : [args.nearest_neighbor // 2],
-            'genStruct' : args.cgen,
+            'genStruct' : args.conditional_generator,
             'genFeatures' : True,
         },
         'stages': [[0, 0]]
