@@ -82,6 +82,8 @@ parser.add_argument('-modelnorm', '--model-norm', type = str, default = "None", 
 parser.add_argument('-maxpconv', '--max-pool-conv', dest = "max_pool_conv", action = 'store_const', default = False, const = True, help = 'Enable max pool conv instead of mean (sum)')
 parser.add_argument('-density', '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
 
+parser.add_argument('-latent', '--latent-code', dest = 'latent_code', action='store_const', default = False, const = True, help = "Store latent code instead of reconstruction results")
+
 args = parser.parse_args()
 
 def write_models(array, meta, dirc, name):
