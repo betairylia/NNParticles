@@ -125,6 +125,10 @@ if not os.path.exists(save_path):
 
 model_config = None
 
+if args.load != "auto":
+    print("Please use -load auto for any case. THANKS!!")
+    raise NotImplementedError
+
 if args.load == "auto" or args.load == "Auto":
     print("Loading model config from %s" % os.path.join(save_path, 'config.json'))
     with open(os.path.join(save_path, 'config.json'), 'r') as jsonFile:
