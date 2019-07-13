@@ -907,11 +907,11 @@ class model_particles:
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
-    def chamfer_metric(self, particles, particles_ref, groundtruth, pos_range, loss_func, EMD = False, Sinkhorn = False):
+    def chamfer_metric(self, particles, particles_ref, groundtruth, pos_range, loss_func, EMD = False, Sinkhorn = False, is_train = True):
         
         config = self.config
 
-        if config['loss'] == 'sinkhorn':
+        if config['loss'] == 'sinkhorn' and is_train:
 
             bs = groundtruth.shape[0]
             Np = particles.shape[1]
@@ -933,7 +933,7 @@ class model_particles:
             distance_loss = distance * transport_mat
             distance_loss = tf.reduce_sum(distance_loss)
 
-        elif config['loss'] == 'EMDUB':
+        elif config['loss'] == 'EMDUB' or not is_train:
             
             bs = groundtruth.shape[0]
             Np = particles.shape[1]
@@ -946,7 +946,7 @@ class model_particles:
             distance = distance * match
             distance_loss = tf.reduce_mean(tf.reduce_sum(distance, axis = -1))
         
-        elif config['loss'] == 'chamfer':
+        elif config['loss'] == 'chamfer' and is_train:
             
             # test - shuffle the groundtruth and calculate the loss
             # rec_particles = tf.stack(list(map(lambda x: tf.random.shuffle(x), tf.unstack(self.ph_X[:, :, 0:6]))))
@@ -1063,7 +1063,7 @@ class model_particles:
                     loss.append(recLoss)
             else:
                 rec = rec_X
-                loss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, tf.square) # Keep use L2 for validation loss.
+                loss = self.chamfer_metric(rec_X, rec_X_ref, normalized_X[:, :, 0:outDim], 3, tf.square, is_train = False) # Keep use L2 for validation loss.
                 vls = []
                 pos = posX
                 fea = feaX
