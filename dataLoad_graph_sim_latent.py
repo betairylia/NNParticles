@@ -87,7 +87,7 @@ def gen_batch(data, batch_size, ratio, train_steps = 30, shuffle = True):
     i = 0
     
     batch_X = np.zeros((batch_size, train_steps, N, C))
-    batch_steps = np.zeros((batch_size, train_steps))
+    batch_steps = np.zeros((batch_size, train_steps), dtype=np.int32)
     
     while True:
         cur_content = contents[i]
@@ -109,8 +109,8 @@ def gen_batch(data, batch_size, ratio, train_steps = 30, shuffle = True):
 def get_headers(path, test_path):
 
     files, val, norm = get_fileNames(path)
-    tl_files, _ = get_fileNames(os.path.join(test_path, 'latent/'))
-    tr_files, tr_norm = get_fileNames(os.path.join(test_path, 'raw/'))
+    tl_files, _ = get_fileNames_predict(os.path.join(test_path, 'latent/'))
+    tr_files, tr_norm = get_fileNames_predict(os.path.join(test_path, 'raw/'))
 
     return files, val, norm, tl_files, tr_files, tr_norm
 
@@ -155,14 +155,20 @@ def gen_epochs(n_epochs, header, batch_size, ratio = 0.3, train_steps = 30, sim_
             gen_batch(data, batch_size, ratio, train_steps, shuffle = True),\
             gen_batch(data_val, batch_size, -1.0, train_steps, shuffle = True)
 
-def get_one_test_file(raw_file, latent_file, sim_file_idx, sim_steps = 380):
+def get_one_test_file(raw_file, latent_file, sim_file_idx, sim_steps = 380, raw_particles = 2048):
 
     raw = to_sep_sims(np.load(raw_file), single_file_sim = sim_steps)
+    
+    raw = raw[sim_file_idx:(sim_file_idx+1), :, :, :]
+    raw = np.transpose(raw, (2, 0, 1, 3))
+    raw = np.random.permutation(raw)[:raw_particles]
+    raw = np.transpose(raw, (1, 2, 0, 3))
+    
     lat = to_sep_sims(np.load(latent_file), single_file_sim = sim_steps)
 
-    return raw[sim_file_idx:(sim_file_idx+1), :, :, :], lat[sim_file_idx:(sim_file_idx+1), :, :, :]
+    return raw, lat[sim_file_idx:(sim_file_idx+1), :, :, :]
 
-def save_npy_to_GRBin(data, destpath):
+def save_npy_to_GRBin(data, dstPath):
     
     assert(len(data.shape) == 3)
     if data.shape[2] > 3:

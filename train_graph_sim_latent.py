@@ -130,7 +130,7 @@ elif args.config != 'None':
         model_config = json.load(jsonFile)
 else:
     print("Loading model config from %s" % os.path.join(AE_load_path, 'config.json'))
-    with open(os.path.join(save_path, 'config.json'), 'r') as jsonFile:
+    with open(os.path.join(AE_load_path, 'config.json'), 'r') as jsonFile:
         model_config = json.load(jsonFile)
 
 if model_config == None:
@@ -174,15 +174,15 @@ if model_config == None:
         },
         'simulator': {
             'layers': [256],
-            'knnk': [args.nearest_neighbor],
+            'knnk': args.nearest_neighbor,
             'GRU': False,
             'GRU_hd': 256,
             'IN': True,
-        }
+        },
         'stages': [[0, 0]]
     }
 
-elif model_config['simulator'] == None: # add to AE config
+elif 'simulator' not in model_config: # add to AE config
 
     model_config['ccnt'] = args.cluster_count
     model_config['cdim'] = args.cluster_dim
@@ -190,7 +190,7 @@ elif model_config['simulator'] == None: # add to AE config
 
     model_config['simulator'] = {
         'layers': [256],
-        'knnk': [args.nearest_neighbor],
+        'knnk': args.nearest_neighbor,
         'GRU': False,
         'GRU_hd': 256,
         'IN': True,
@@ -258,7 +258,7 @@ model.build_test_output([1, 2048, 6], test_normalize, True)
 ptraps = tf.summary.scalar('Training Loss', model.train_loss)
 vals = tf.summary.scalar('Validation Loss', model.val_loss, collections = None)
 
-merged_train = tf.summary.merge(ptraps)
+merged_train = tf.summary.merge([ptraps])
 merged_val = tf.summary.merge([vals])
 
 # Create session
@@ -297,14 +297,15 @@ if args.load == "auto" or args.load == "Auto":
     latest_ckpt = tf.train.latest_checkpoint(save_path)
     if latest_ckpt is not None:
         saver.restore(sess, latest_ckpt)
-        print(colored("Check point loaded: %s" % latest_ckpt), 'red')
+        print(colored("Check point loaded: %s" % latest_ckpt, 'red'))
 elif args.load != "None":
     saver.restore(sess, args.load)
 else: # Load AE
+    AEsaver = tf.train.Saver(tf.trainable_variables('net/ParticleDecoder'))
     latest_ckpt = tf.train.latest_checkpoint(AE_load_path)
     if latest_ckpt is not None:
-        saver.restore(sess, latest_ckpt)
-        print(colored("AE Check point loaded: %s" % latest_ckpt), 'red')
+        AEsaver.restore(sess, latest_ckpt)
+        print(colored("AE Check point loaded: %s" % latest_ckpt, 'red'))
 
 batch_idx_train = 0
 batch_idx_test = 0
@@ -312,21 +313,19 @@ batch_idx_test = 0
 epoch_idx = 0
 iteration = 0
 
-epCount = dataLoad.fileCount(args.datapath)
-stepFactor = 9
-
 epochs = dataLoad.gen_epochs(args.epochs, data_header, args.batch_size, 0.3, args.loop_sim, args.file_sim_steps)
 
 # TODO: loss weights
 loss_weights = np.ones((args.file_sim_steps))
 one_weights = np.ones((args.file_sim_steps))
 
-test_raws, test_lats = get_one_test_file(test_rf[0], test_lf[0], 0, args.file_sim_steps)
+test_raws, test_lats = dataLoad.get_one_test_file(test_rf[0], test_lf[0], 0, args.file_sim_steps)
 
 if not os.path.exists('./previews/%s/' % args.previewName):
         os.makedirs('./previews/%s/' % args.previewName)
 
-dataLoad.save_npy_to_GRBin(test_sim_rec[0], './previews/%s/gt.grbin' % args.previewName)
+dataLoad.save_npy_to_GRBin(test_raws[0], './previews/%s/gt.grbin' % args.previewName)
+dataLoad.save_npy_to_GRBin(test_lats[0], './previews/%s/latent.grbin' % args.previewName)
 
 sess.graph.finalize()
 
@@ -348,11 +347,11 @@ while True:
     while True:
 
         _x, _x_steps = next(batch_train, [None, None])
-        if _x == None:
+        if _x is None:
             break
 
         _x_lweight = loss_weights[_x_steps]
-        print(_x_lweight)
+        # print(_x_lweight)
 
         if batch_idx_train == 10 and args.profile:
             raise NotImplementedError
@@ -366,7 +365,7 @@ while True:
             
             batch_idx_train += 1
 
-        print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ' + colored("Train =%7.4f" % (i, n_loss), 'green'), end = ' ')
+        print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ' + colored("Train =%7.4f" % (n_loss), 'green'), end = ' ')
 
         if batch_idx_train % 20 == 0:
             _vx, _vx_steps = next(batch_validate, [None, None])
@@ -382,7 +381,7 @@ while True:
 
         print(colored("(val =%7.4f)" % n_loss, 'blue'))
 
-        if batch_idx_train % 500 == 0:
+        if batch_idx_train % 100 == 0:
             cprint("Test simulation in progess ... ", 'cyan')
             test_sim_rec, test_loss = model.get_test_output(test_lats[:, 0, :, :], test_raws, sess, verbose = True)
             dataLoad.save_npy_to_GRBin(test_sim_rec[0], './previews/%s/test-%d-rc.grbin' % (args.previewName, batch_idx_train))

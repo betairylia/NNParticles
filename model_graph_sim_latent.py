@@ -477,14 +477,14 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
         
         return n
 
-def autofc(inputs, outDim, act = None, bias = True, name = 'fc'):
+def autofc(inputs, outDim, act = None, bias = True, name = 'fc', W_init = None):
     
     input_shape = inputs.shape.as_list()
     inputs = tf.reshape(inputs, [-1, input_shape[-1]])
 
     with tf.variable_scope(name):
         
-        w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype)
+        w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype, initializer = W_init)
 
         x = tf.matmul(inputs, w)
 
@@ -953,13 +953,15 @@ class model_particles:
 
     def simulator(self, pos, particles, name = 'Simluator', is_train = True, reuse = False):
 
+        config = self.config
+
         w_init = tf.random_normal_initializer(stddev = 0.005 * self.wdev)
         w_init_pref = tf.random_normal_initializer(stddev = 0.001 * self.wdev)
         b_init = tf.constant_initializer(value=0.0)
 
         with tf.variable_scope(name, reuse = reuse) as vs:
             
-            _, gIdx, gEdg = kNNG_gen(pos, config['simulator']['knnk'], 3, name = 'simulator/ggen')
+            _, gIdx, gEdg, nnnorm = kNNG_gen(pos, config['simulator']['knnk'], 3, name = 'simulator/ggen')
             layers = config['simulator']['layers']
             n = particles
             Np = particles.shape[1]
@@ -1061,7 +1063,8 @@ class model_particles:
             distance_loss = tf.reduce_sum(distance_loss, axis = [1, 2])
 
         elif config['loss'] == 'EMDUB' or not is_train:
-            
+        # elif False:
+
             bs = groundtruth.shape[0]
             Np = particles.shape[1]
             Ng = groundtruth.shape[1]
@@ -1074,6 +1077,7 @@ class model_particles:
             distance_loss = tf.reduce_mean(tf.reduce_sum(distance, axis = -1), axis = -1)
         
         elif config['loss'] == 'chamfer' and is_train:
+        # elif True:
 
             raise NotImplementedError
             
@@ -1136,25 +1140,33 @@ class model_particles:
         normalized_X = (self.ph_X - tf.broadcast_to(self.normalize['mean'], self.ph_X.shape)) / tf.broadcast_to(self.normalize['std'], self.ph_X.shape)
 
         # pX, fX = normalized_X[:, :, :, :3], normalized_X[:, :, :, 3:]
-        pX_cur, fX_cur = pX[:, 0, :, :3], fX[:, 0, :, 3:]
+        pX_cur, fX_cur = normalized_X[:, 0, :, :3], normalized_X[:, 0, :, 3:]
         loss_total = 0.0
+        
+        with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
 
-        for ls in range(self.sim_steps - 1):
-            pX_cur, fX_cur = self.simulator(pX_cur, fX_cur, name = 'Simulator', is_train = is_train, reuse = False if ls == 0 and reuse == False else True)
-            X_cur = tf.concat([pX_cur, fX_cur], axis = -1)
-            loss = self.chamfer_metric(X_cur, X_cur, self.normalized_X[:, ls+1, :, :], 3, tf.square, EMD = True)
-            loss_total += tf.reduce_mean(loss * self.ph_stepweights[:, ls+1])
+            for ls in range(self.sim_steps - 1):
+                pX_cur, fX_cur = self.simulator(pX_cur, fX_cur, name = 'Simulator', is_train = is_train, reuse = False if ls == 0 and reuse == False else True)
+                X_cur = tf.concat([pX_cur, fX_cur], axis = -1)
+                loss = self.chamfer_metric(X_cur, X_cur, normalized_X[:, ls+1, :, :], 3, tf.square, EMD = True)
+                loss_total += tf.reduce_mean(loss * self.ph_stepweights[:, ls+1])
         
         return loss_total
 
     # Only simulates posX & feaX for a single step
     def build_predict_Sim(self, pos, fea, is_train = False, reuse = False):
 
+        _X = tf.concat([pos, fea], axis = -1)
+        normalized_X = (_X - tf.broadcast_to(self.normalize['mean'], _X.shape)) / tf.broadcast_to(self.normalize['std'], _X.shape)
+
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
-            sim_posY, sim_feaY = self.simulator(pos, fea, 'Simulator', is_train, reuse)
+            sim_posY, sim_feaY = self.simulator(normalized_X[:, :, :3], normalized_X[:, :, 3:], 'Simulator', is_train, reuse)
+
+        sRec = tf.concat([sim_posY, sim_feaY], axis = -1)
+        sRec = sRec * tf.broadcast_to(self.normalize['std'], sRec.shape) + tf.broadcast_to(self.normalize['mean'], sRec.shape)
         
-        return sim_posY, sim_feaY
+        return sRec[:, :, :3], sRec[:, :, 3:]
 
     # Decodes Y
     def build_predict_Dec(self, pos, fea, gt, dec_normalize, is_train = False, reuse = False, outDim = 6):
@@ -1165,13 +1177,14 @@ class model_particles:
             _, [rec, _, rec_f], _, _, meta = self.particleDecoder(pos, fea, None, outDim, is_train = is_train, reuse = reuse)
 
         rec = rec
-        reconstruct_loss = tf.reduce_mean(self.chamfer_metric(rec, rec, gt[:, :, 0:outDim], 3, tf.square, EMD = True))
 
         rec = rec * tf.broadcast_to(dec_normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(dec_normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
 
+        reconstruct_loss = tf.reduce_mean(self.chamfer_metric(rec, rec, gt[:, :, 0:outDim], 3, tf.square, EMD = True))
+
         return rec, reconstruct_loss
 
-    def build_test_output(self, gt_shape, gt_norm, reuse = True):
+    def build_test_output(self, gt_shape, gt_norm, reuse = True, decReuse = False):
 
         # gt - np array with [bs, 2048, 6]
         bs = gt_shape[0]
@@ -1183,7 +1196,7 @@ class model_particles:
         self.ph_rec_g = tf.placeholder(default_dtype, [bs, Np, od])
 
         self.spos, self.sfea = self.build_predict_Sim(self.ph_tst_p, self.ph_tst_f, False, reuse)
-        self.rec, self.rLoss = self.build_predict_Dec(self.ph_tst_p, self.ph_tst_f, self.ph_rec_g, gt_norm, False, reuse, od)
+        self.rec, self.rLoss = self.build_predict_Dec(self.ph_tst_p, self.ph_tst_f, self.ph_rec_g, gt_norm, False, decReuse, od)
 
     def get_test_output(self, inp, gt, sess, verbose = False):
 
@@ -1199,17 +1212,22 @@ class model_particles:
         loss = np.zeros((ss))
         rec = np.zeros((bs, ss, Np, od))
 
+        _rec, _rloss = sess.run([self.rec, self.rLoss], feed_dict = {self.ph_tst_p: _spos, self.ph_tst_f: _sfea, self.ph_rec_g: gt[:, 0, :, :]})
+        rec[:, 0, :, :] = _rec
+        if verbose:
+                print(colored("Test It 0000", 'red') + ' - %7.4f' % np.mean(_rloss))
+
         for s in range(ss - 1):
 
             cur_step = s + 1
             _spos, _sfea = sess.run([self.spos, self.sfea], feed_dict = {self.ph_tst_p: _spos, self.ph_tst_f: _sfea})
-            _rec, _rloss = sess.run([self.rec, self.rLoss], feed_dict = {self.ph_tst_p: _spos, self.ph_tst_f: _sfea, self.ph_rec_g: gt[:, cur_ste, :, :]})
+            _rec, _rloss = sess.run([self.rec, self.rLoss], feed_dict = {self.ph_tst_p: _spos, self.ph_tst_f: _sfea, self.ph_rec_g: gt[:, cur_step, :, :]})
             
             loss[cur_step] = np.mean(_rloss)
             rec[:, cur_step, :, :] = _rec
 
             if verbose:
-                print(colored("Test It %04d" % s, 'red') + ' - %7.4f' % np.mean(_rloss))
+                print(colored("Test It %04d" % cur_step, 'red') + ' - %7.4f' % np.mean(_rloss))
         
         return rec, loss
 
@@ -1221,7 +1239,7 @@ class model_particles:
 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            gvs = self.optimizer.compute_gradients(self.train_particleLosses[i], var_list = self.particle_vars[i])
+            gvs = self.optimizer.compute_gradients(self.train_loss)
             capped_gvs = [(tf.clip_by_value(grad, -1., 1.) if grad is not None else None, var) for grad, var in gvs]
             # self.train_op = self.optimizer.minimize(self.train_particleLoss)
             self.train_op = self.optimizer.apply_gradients(capped_gvs)
