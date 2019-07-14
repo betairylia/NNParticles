@@ -123,6 +123,10 @@ if not os.path.exists(save_path):
 
 # Generate or load model configs
 
+args.outpath = os.path.join(args.outpath, args.name)
+if not os.path.exists(args.outpath):
+    os.makedirs(args.outpath)
+
 model_config = None
 
 if args.load != "auto":
