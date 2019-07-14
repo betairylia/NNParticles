@@ -223,6 +223,8 @@ stepFactor = 9
 
 epochs = dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim)
 
+sess.graph.finalize()
+
 while True:
     batch_train, batch_validate = next(epochs, [None, None])
     epoch_idx += 1
@@ -258,17 +260,17 @@ while True:
         
         feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
         
-        if batch_idx_train % 200 == 0:
-            n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
+        # if batch_idx_train % 200 == 0:
+        #     n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, model.val_rec[0, :, :], model.val_gt[0, :, :]], feed_dict = feed_dict)
             
-            val_writer.add_summary(summary, batch_idx_test * 20)
-            # val_writer.add_summary(summary_2, batch_idx_test)
+        #     val_writer.add_summary(summary, batch_idx_test * 20)
+        #     # val_writer.add_summary(summary_2, batch_idx_test)
             
-            write_models(_rec, None, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
-            write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
-            # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
-            batch_idx_test += 1
-        elif batch_idx_train % 20 == 0:
+        #     write_models(_rec, None, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
+        #     write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
+        #     # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
+        #     batch_idx_test += 1
+        if batch_idx_train % 20 == 0:
             n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
             val_writer.add_summary(summary, batch_idx_test * 20)
             batch_idx_test += 1
