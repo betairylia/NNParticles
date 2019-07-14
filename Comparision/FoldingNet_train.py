@@ -270,6 +270,7 @@ while True:
         #     write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
         #     # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
         #     batch_idx_test += 1
+        n_loss = 0.0
         if batch_idx_train % 20 == 0:
             n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
             val_writer.add_summary(summary, batch_idx_test * 20)
