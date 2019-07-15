@@ -13,10 +13,14 @@ import json
 
 from termcolor import colored, cprint
 
-import model_graph_sim_latent as model
-from model_graph_sim_latent import model_particles as model_net
+import model_graph_final as model
+from model_graph_final import model_particles as model_net
 
-import dataLoad_graph_sim_latent as dataLoad            # New method, shuffle & mixed randomly
+# import model_graph as model
+# from model_graph import model_particles as model_net
+
+# import dataLoad_particleTest as dataLoad                        # Legacy method, strongly disagree with i.i.d. distribution among batch(epoch)es.
+import dataLoad_graph as dataLoad            # New method, shuffle & mixed randomly
 
 from time import gmtime, strftime
 
@@ -32,6 +36,7 @@ import gc
 parser = argparse.ArgumentParser(description="Run the NN for particle simulation")
 
 parser.add_argument('datapath')
+parser.add_argument('outpath')
 parser.add_argument('-gpu', '--cuda-gpus')
 
 parser.add_argument('-ep', '--epochs', type = int, default = 80)
@@ -56,10 +61,11 @@ parser.add_argument('-l2', '--l2-loss', dest = 'loss_func', action='store_const'
 parser.add_argument('-maxpool', '--maxpool', dest = 'combine_method', action='store_const', default = tf.reduce_mean, const = tf.reduce_max, help = "use Max pooling instead of sum up for permutation invariance")
 parser.add_argument('-adam', '--adam', dest = 'adam', action='store_const', default = True, const = False, help = "Use Adam optimizer")
 parser.add_argument('-fp16', '--fp16', dest = 'dtype', action='store_const', default = tf.float32, const = tf.float16, help = "Use FP16 instead of FP32")
+parser.add_argument('-nloop', '--no-loop', dest = 'doloop', action='store_const', default = False, const = True, help = "Don't loop simulation regularization")
+parser.add_argument('-nsim', '--no-sim', dest = 'dosim', action='store_const', default = False, const = True, help = "Don't do Simulation")
 
 parser.add_argument('-log', '--log', type = str, default = "logs", help = "Path to log dir")
 parser.add_argument('-name', '--name', type = str, default = "NoName", help = "Name to show on tensor board")
-parser.add_argument('-nameAE', '--nameAE', type = str, default = "NoName", help = "Name of AE model to load")
 parser.add_argument('-preview', '--previewName', type = str, default = "unnamed", help = "Name for save preview point clouds")
 parser.add_argument('-save', '--save', type = str, default = "model", help = "Path to store trained model")
 parser.add_argument('-load', '--load', type = str, default = "None", help = "File to load to continue training")
@@ -76,7 +82,7 @@ parser.add_argument('-modelnorm', '--model-norm', type = str, default = "None", 
 parser.add_argument('-maxpconv', '--max-pool-conv', dest = "max_pool_conv", action = 'store_const', default = False, const = True, help = 'Enable max pool conv instead of mean (sum)')
 parser.add_argument('-density', '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
 
-parser.add_argument('-fss', '--file-sim-steps', type = int, default = 380, help = "How many sim steps per run")
+parser.add_argument('-latent', '--latent-code', dest = 'latent_code', action='store_const', default = False, const = True, help = "Store latent code instead of reconstruction results")
 
 args = parser.parse_args()
 
@@ -111,95 +117,15 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 
 logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss", gmtime()) + ")/")
 
-AE_load_path = "savedModels/" + args.nameAE + "/"
 save_path = "savedModels/" + args.name + "/"
 if not os.path.exists(save_path):
     os.makedirs(save_path)
 
 # Generate or load model configs
 
-model_config = None
-
-if args.load == "auto" or args.load == "Auto":
-    print("Loading model config from %s" % os.path.join(save_path, 'config.json'))
-    with open(os.path.join(save_path, 'config.json'), 'r') as jsonFile:
-        model_config = json.load(jsonFile)
-elif args.config != 'None':
-    print("Loading model config from %s" % args.config)
-    with open(args.config, 'r') as jsonFile:
-        model_config = json.load(jsonFile)
-else:
-    print("Loading model config from %s" % os.path.join(AE_load_path, 'config.json'))
-    with open(os.path.join(AE_load_path, 'config.json'), 'r') as jsonFile:
-        model_config = json.load(jsonFile)
-
-if model_config == None:
-
-    model_config =\
-    {
-        'useVector': False,                             # pending
-        'conv': args.conv,                              # pending
-        'convd': args.conv_dim,                            # OK
-        'loss': args.loss_metric,                              # OK
-        'maxpoolconv': args.max_pool_conv,              # OK
-        'density_estimate': args.density_estimation,    # pending
-        'normalization': args.model_norm,               # OK
-
-        'ccnt': args.cluster_count,
-        'cdim': args.cluster_dim,
-        'steps': args.loop_sim,
-
-        'encoder': {
-            'blocks' : 3,
-            'particles_count' : [2048, 512, args.cluster_count],
-            'conv_count' : [2, 0, 0],
-            'res_count' : [0, 2, 3],
-            'kernel_size' : [args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor],
-            'bik' : [0, 48, 96],
-            'channels' : [args.hidden_dim // 2, args.hidden_dim * 2, max(args.latent_dim, args.hidden_dim * 4)],
-        },
-        'decoder': {
-            'blocks' : 1,
-            'pcnt' : [2048], # particle count
-            'generator' : [5], # Generator depth
-            'maxLen' : [0.05],
-            'nConv' : [0],
-            'nRes' : [0],
-            'hdim' : [args.hidden_dim // 3],
-            'fdim' : [512], # dim of features used for folding
-            'gen_hdim' : [512],
-            'knnk' : [args.nearest_neighbor // 2],
-            'genStruct' : args.conditional_generator,
-            'genFeatures' : True,
-        },
-        'simulator': {
-            'layers': [256],
-            'knnk': args.nearest_neighbor,
-            'GRU': False,
-            'GRU_hd': 256,
-            'IN': True,
-        },
-        'stages': [[0, 0]]
-    }
-
-elif 'simulator' not in model_config: # add to AE config
-
-    model_config['ccnt'] = args.cluster_count
-    model_config['cdim'] = args.cluster_dim
-    model_config['steps'] = args.loop_sim
-
-    model_config['simulator'] = {
-        'layers': [256],
-        'knnk': args.nearest_neighbor,
-        'GRU': False,
-        'GRU_hd': 256,
-        'IN': True,
-    }
-
-with open(os.path.join(save_path, 'config.json'), 'w') as jsonFile:
-    json.dump(model_config, jsonFile)
-
-print("Model config saved as %s" % os.path.join(save_path, 'config.json'))
+args.outpath = os.path.join(args.outpath, args.name)
+if not os.path.exists(args.outpath):
+    os.makedirs(args.outpath)
 
 model.default_dtype = args.dtype
 # with tf.variable_scope('summaries') as ss:
@@ -218,11 +144,7 @@ if args.dtype == tf.float16:
     optimizer = tf.contrib.mixed_precision.LossScaleOptimizer(optimizer, loss_scale_manager)
     os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
 
-train_val_path = os.path.join(args.datapath, 'train_val/')
-test_path = os.path.join(args.datapath, 'test/')
-
-data_header = dataLoad.get_headers(train_val_path, test_path)
-_, _, normalize, test_lf, test_rf, test_normalize = data_header
+_, _, normalize = dataLoad.get_fileNames(args.datapath)
 
 # model = model_net(16, args.latent_dim, args.batch_size, optimizer)
 model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim, model_config)
@@ -232,11 +154,9 @@ model.combine_method = args.combine_method
 model.knn_k = args.nearest_neighbor
 model.cluster_feature_dim = args.cluster_dim
 model.cluster_count = args.cluster_count
-model.doSim = True
-model.doLoop = True
+model.doSim = args.dosim
+model.doLoop = args.dosim and args.doloop
 model.loops = args.loop_sim
-
-train_loops = args.loop_sim
 
 model.normalize = normalize
 if normalize == {}:
@@ -251,15 +171,10 @@ model.initial_grid_size = model.total_world_size / 16
 # model.initial_grid_size = model.total_world_size / 4
 
 # Build the model
-model.build_model()
-model.build_test_output([1, 2048, 6], test_normalize, True)
-
-# Summary the variables
-ptraps = tf.summary.scalar('Training Loss', model.train_loss)
-vals = tf.summary.scalar('Validation Loss', model.val_loss, collections = None)
-
-merged_train = tf.summary.merge([ptraps])
-merged_val = tf.summary.merge([vals])
+# model.build_model()
+latent = model.build_predict_Enc(is_train = False, reuse = False)
+rec, rLoss = model.build_predict_Dec(latent, is_train = False, reuse = False, outDim = args.output_dim)
+outDim = args.output_dim
 
 # Create session
 config = tf.ConfigProto()
@@ -284,12 +199,6 @@ if args.enable_debug:
     #     cprint("Shape: " + (v.shape), 'green')
     #     #print(v)
 
-train_writer = tf.summary.FileWriter(logPath + '/train', sess.graph)
-val_writer = tf.summary.FileWriter(logPath + '/validation', sess.graph)
-
-sess.run(tf.local_variables_initializer())
-sess.run(tf.global_variables_initializer())
-
 # Save & Load
 saver = tf.train.Saver()
 
@@ -297,100 +206,51 @@ if args.load == "auto" or args.load == "Auto":
     latest_ckpt = tf.train.latest_checkpoint(save_path)
     if latest_ckpt is not None:
         saver.restore(sess, latest_ckpt)
-        print(colored("Check point loaded: %s" % latest_ckpt, 'red'))
+        print("Check point loaded: %s" % latest_ckpt)
 elif args.load != "None":
     saver.restore(sess, args.load)
-else: # Load AE
-    AEsaver = tf.train.Saver(tf.trainable_variables('net/ParticleDecoder'))
-    latest_ckpt = tf.train.latest_checkpoint(AE_load_path)
-    if latest_ckpt is not None:
-        AEsaver.restore(sess, latest_ckpt)
-        print(colored("AE Check point loaded: %s" % latest_ckpt, 'red'))
 
-batch_idx_train = 0
-batch_idx_test = 0
-
+batch_idx = 0
 epoch_idx = 0
 iteration = 0
 
-epochs = dataLoad.gen_epochs(args.epochs, data_header, args.batch_size, 0.3, args.loop_sim, args.file_sim_steps)
+maxl_array = np.zeros((2))
+maxl_array[0] = args.voxel_size
+maxl_array[1] = args.voxel_size
 
-# TODO: loss weights
-loss_weights = np.ones((args.file_sim_steps))
-one_weights = np.ones((args.file_sim_steps))
-
-test_raws, test_lats = dataLoad.get_one_test_file(test_rf[0], test_lf[0], 0, args.file_sim_steps)
-
-if not os.path.exists('./previews/%s/' % args.previewName):
-        os.makedirs('./previews/%s/' % args.previewName)
-
-dataLoad.save_npy_to_GRBin(test_raws[0], './previews/%s/gt.grbin' % args.previewName)
-dataLoad.save_npy_to_GRBin(test_lats[0], './previews/%s/latent.grbin' % args.previewName)
+bs = args.batch_size
+N = args.voxel_size
 
 sess.graph.finalize()
 
-while True:
-    
-    print("gc.garbage:")
-    print(gc.garbage)
-    del gc.garbage[:]
-    
-    batch_train, batch_validate = next(epochs, [None, None])
+for epoch_test, outFileName, outFileShape in dataLoad.gen_epochs_predict(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, args.output_dim):
+
     epoch_idx += 1
-
-    if batch_train == None:
-        break
-
     print(colored("Epoch %03d" % (epoch_idx), 'yellow'))
 
-    # Training loop
-    while True:
+    # Train
+    ecnt = 0
+    epoch_results = []
+    for _x, _x_size in epoch_test:
 
-        _x, _x_steps = next(batch_train, [None, None])
-        if _x is None:
-            break
+        batch_idx += 1
 
-        _x_lweight = loss_weights[_x_steps]
-        # print(_x_lweight)
+        if args.latent_code == True:
 
-        if batch_idx_train == 10 and args.profile:
-            raise NotImplementedError
+            _enc = sess.run([latent], feed_dict = { model.ph_X: _x[0] })
+            out_result = _enc
+
+            print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored(" Test Iteration %08d" % batch_idx, 'magenta'))
         
         else:
-            
-            feed_dict = { model.ph_X: _x, model.ph_stepweights: _x_lweight }
 
-            _, n_loss, summary = sess.run([model.train_op, model.train_loss, merged_train], feed_dict = feed_dict)
-            train_writer.add_summary(summary, batch_idx_train)
-            
-            batch_idx_train += 1
+            _prec, _loss = sess.run([rec, rLoss], feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array })
+            out_result = _prec
 
-        print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ' + colored("Train =%7.4f" % (n_loss), 'green'), end = ' ')
+            print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored(" Test Iteration %08d" % batch_idx, 'magenta') + ' - ' + colored(" Loss = %03.4f" % _loss, 'green'))
 
-        if batch_idx_train % 20 == 0:
-            _vx, _vx_steps = next(batch_validate, [None, None])
-            _vx_lweight = one_weights[_vx_steps]
-            
-            feed_dict = { model.ph_X: _vx, model.ph_stepweights: _vx_lweight }
-            
-            n_loss, summary = sess.run([model.val_loss, merged_val], feed_dict = feed_dict)
-            val_writer.add_summary(summary, batch_idx_test * 20)
-            batch_idx_test += 1
-        else:
-            n_loss = 0.0
-
-        print(colored("(val =%7.4f)" % n_loss, 'blue'))
-
-        if batch_idx_train % 100 == 0:
-            cprint("Test simulation in progess ... ", 'cyan')
-            test_sim_rec, test_loss = model.get_test_output(test_lats[:, 0, :, :], test_raws, sess, verbose = True)
-            dataLoad.save_npy_to_GRBin(test_sim_rec[0], './previews/%s/test-%d-rc.grbin' % (args.previewName, batch_idx_train))
-
-        if batch_idx_train % (16000 // args.batch_size) == 0:
-            sav = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
-            print("Checkpoint saved in %s" % (sav))
-
-# Save the network
-if(args.save != "None"):
-    save_path = saver.save(sess, save_path + "/final.ckpt")
-    print("Model saved in %s" % (save_path))
+        epoch_results.append(out_result)
+    
+    print("Writing file for Ep %04d ... " % epoch_idx)
+    final_result = np.concatenate(epoch_results, axis = 0)
+    np.save(os.path.join(args.outpath, outFileName), final_result)

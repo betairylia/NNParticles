@@ -450,25 +450,18 @@ class model_particles:
         return rec, normalized_X[:, :, 0:outDim], loss
 
     # Only encodes X
-    def build_predict_Enc(self, normalized_X, is_train = False, reuse = False):
+    def build_predict_Enc(self, is_train = False, reuse = False):
 
         # Mixed FP16 & FP32
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
         # with tf.variable_scope('net'):
 
-            # Go through the particle AE
-
-            # tf.summary.histogram('GroundTruth', normalized_X[:, :, 0:3])
-            
-            var_list = []
-            floss = 0
+            normalized_X = (self.ph_X[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
 
             # Enc(X)
-            posX, feaX, _v, pPos, _floss, evals = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse, returnPool = True)
-            var_list.append(_v)
-            floss += _floss
+            latent = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
 
-        return posX, feaX, pPos, evals
+        return latent
     
     # Only simulates posX & feaX for a single step
     def build_predict_Sim(self, pos, fea, is_train = False, reuse = False):
@@ -480,16 +473,20 @@ class model_particles:
         return sim_posY, sim_feaY
 
     # Decodes Y
-    def build_predict_Dec(self, pos, fea, gt, is_train = False, reuse = False, outDim = 6):
+    def build_predict_Dec(self, latent, is_train = False, reuse = False, outDim = 6):
 
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
-            _, [rec, _, rec_f], _, _ = self.particleDecoder(pos, fea, self.ph_card, outDim, is_train = is_train, reuse = reuse)
+            normalized_X = (self.ph_X[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
+
+            rec = self.particleDecoder(latent, self.gridMaxSize, outDim, is_train = is_train, reuse = reuse)
 
         rec = rec
-        reconstruct_loss = self.chamfer_metric(rec, gt, 3, self.loss_func, True) * 40.0
+        loss = self.chamfer_metric(rec, rec, normalized_X[:, :, 0:outDim], 3, tf.square, EMD = True) # Keep use L2 for validation loss.
 
-        return rec * self.normalize, rec_f * self.normalize, reconstruct_loss
+        rec = rec * tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
+
+        return rec, loss
 
     def build_model(self):
 
