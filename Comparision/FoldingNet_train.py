@@ -133,6 +133,9 @@ model.doSim = args.dosim
 model.doLoop = args.dosim and args.doloop
 model.loops = args.loop_sim
 
+normalize['mean'] = normalize['mean'][:args.output_dim]
+normalize['std'] = normalize['std'][:args.output_dim]
+
 model.normalize = normalize
 if normalize == {}:
     print("No normalization descriptor found ... ")
