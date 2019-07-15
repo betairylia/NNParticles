@@ -104,7 +104,7 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recomp
                     # nearest_norm = tf.ones_like(nearest_norm)
                     sigma = tf.reduce_mean(tf.reduce_min(kNNEdg[:, :, 1:], axis = 2))
                     nearest_norm = RBF_dist(kNNEdg, tf.exp(sigma))
-                    nearest_norm = tf.reduce_mean(nearest_norm, axis = 2)
+                    nearest_norm = tf.reduce_mean(nearest_norm, axis = 2, keepdims = True)
                     # nearest_norm = 1.0 / k / (tf.cast(nearest_norm, default_dtype) + 1e-5)
                     nearest_norm = tf.cast(nearest_norm, default_dtype) + 1e-5
                 else:
@@ -1079,7 +1079,7 @@ class model_particles:
 
         print(gtd)
         if gtd is not None:
-            gt_w_d = tf.concat([self.ph_X[:, :, 0:outDim], tf.reshape(gtd, [self.batch_size, self.gridMaxSize, 1])], axis = -1),
+            gt_w_d = tf.concat([self.ph_X[:, :, 0:outDim], tf.reshape(gtd, [self.batch_size, self.gridMaxSize, 1])], axis = -1)
         else:
             gt_w_d = self.ph_X[:, :, 0:outDim]
         return rec, gt_w_d, loss, vls, meta, esamp
