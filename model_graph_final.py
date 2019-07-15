@@ -102,19 +102,20 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recomp
                 if xysame == True:
                     # nearest_norm = tf.reduce_max(kNNEdg, axis = 2) # distance to kth nearest point
                     # nearest_norm = tf.ones_like(nearest_norm)
-                    sigma = tf.get_variable('rbf_sigma', [1], dtype = tf.float16, initializer = tf.constant_initializer(-2.5))
+                    sigma = tf.reduce_mean(tf.reduce_min(kNNEdg[:, :, 1:], axis = 2))
                     nearest_norm = RBF_dist(kNNEdg, tf.exp(sigma))
                     nearest_norm = tf.reduce_mean(nearest_norm, axis = 2)
-                    nearest_norm = 1.0 / k / (tf.cast(nearest_norm, default_dtype) + 1e-5)
+                    # nearest_norm = 1.0 / k / (tf.cast(nearest_norm, default_dtype) + 1e-5)
+                    nearest_norm = tf.cast(nearest_norm, default_dtype) + 1e-5
                 else:
                     print("!")
                     dist = tf.norm(drow - tf.transpose(drow, perm = [0, 2, 1, 3]), ord = 'euclidean', axis = -1)
                     dist = tf.linalg.set_diag(dist, tf.constant(100.0, shape = [bs, Nx], dtype = tf.float16))
                     nearest_norm = tf.reduce_min(dist, axis = -1)
 
-                # nnmean = tf.reduce_mean(nearest_norm, keepdims = True)
+                nnmean = tf.reduce_mean(nearest_norm, keepdims = True)
                 # nearest_norm = tf.minimum(nearest_norm, nnmean) / nnmean
-                # nearest_norm = nearest_norm / nnmean
+                nearest_norm = nearest_norm / nnmean
 
                 # nearest_norm = tf.pow(tf.cast(nearest_norm, default_dtype), 3)
         
@@ -288,11 +289,11 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
         n = tf.reshape(n, [bs, N, k, channels, fCh])
         n = tf.reduce_sum(tf.multiply(cW, n), axis = -1)
 
-        if nearestNorm == True:
-            # n     => [bs, N, k, channels]
-            # nnnorm=> [bs, N]
-            nnnorm_collected = tf.gather_nd(nnnorm, kNNIdx)
-            n = tf.multiply(n, tf.broadcast_to(tf.reshape(nnnorm_collected, [bs, N, k, 1]), [bs, N, k, channels]))
+        # if nearestNorm == True:
+        #     # n     => [bs, N, k, channels]
+        #     # nnnorm=> [bs, N]
+        #     nnnorm_collected = tf.gather_nd(nnnorm, kNNIdx)
+        #     n = tf.multiply(n, tf.broadcast_to(tf.reshape(nnnorm_collected, [bs, N, k, 1]), [bs, N, k, channels]))
 
         print(n.shape)
         print("Graph cConv: [%3d x %2d] = %4d" % (channels, fCh, channels * fCh))
@@ -387,6 +388,9 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
         fCh = convd_ch
         if filters >= 256: 
             fCh = convd_ch
+
+        if nearestNorm == True and nnnorm is not None:
+            inputs = inputs / nnnorm
 
         # feature
         if True:
@@ -506,10 +510,12 @@ class model_particles:
         global normalization_method
         global max_pool_conv
         global convd_ch
+        global nearestNorm
 
         normalization_method = config['normalization']
         max_pool_conv = config['maxpoolconv']
         convd_ch = config['convd']
+        nearestNorm = config['density_estimate']
 
     # 1 of a batch goes in this function at once.
     def particleEncoder(self, input_particle, output_dim, early_stop = 0, is_train = False, reuse = False, returnPool = False):
@@ -605,8 +611,9 @@ class model_particles:
                         gt_density = nnnorm
 
                     if i == 0:
-                        n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i])
-
+                        # no norm was applied to first conv
+                        n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init, kernel_filters = kfilters[i])
+                    
                     n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i])
                     n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i])
 

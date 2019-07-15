@@ -140,7 +140,7 @@ if model_config == None:
         'convd': args.conv_dim,                            # OK
         'loss': args.loss_metric,                              # OK
         'maxpoolconv': args.max_pool_conv,              # OK
-        'density_estimate': args.density_estimation,    # pending
+        'density_estimate': args.density_estimation,    # OK
         'normalization': args.model_norm,               # OK
         'encoder': {
             'blocks' : 3,
