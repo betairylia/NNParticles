@@ -13,8 +13,8 @@ import json
 
 from termcolor import colored, cprint
 
-import model_graph_final as model
-from model_graph_final import model_particles as model_net
+import FoldingNet as model
+from FoldingNet import model_particles as model_net
 
 # import model_graph as model
 # from model_graph import model_particles as model_net
@@ -147,7 +147,7 @@ if args.dtype == tf.float16:
 _, _, normalize = dataLoad.get_fileNames(args.datapath)
 
 # model = model_net(16, args.latent_dim, args.batch_size, optimizer)
-model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim, model_config)
+model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim)
 model.particle_hidden_dim = args.hidden_dim
 model.loss_func = args.loss_func
 model.combine_method = args.combine_method
