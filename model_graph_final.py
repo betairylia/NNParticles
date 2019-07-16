@@ -343,7 +343,7 @@ def bip_kNNGConvLayer_concat(Ys, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_tra
 
         res = n
         res = tf.reduce_sum(res, axis = 2) # combine_method?
-        res = tf.nn.bias_add(res, b_neighbor)
+        res = autofc(res, channels, None, name = 'kernel/mlp_combine')
 
         if act:
             res = act(res)
