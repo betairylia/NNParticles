@@ -317,7 +317,7 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
     return n # [bs, Nx, channels]
 
 # inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name, nnnorm
-def bip_kNNGConvLayer_concat(Ys, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive', nnnorm):
+def bip_kNNGConvLayer_concat(Ys, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name, nnnorm):
     
     with tf.variable_scope(name):
 
