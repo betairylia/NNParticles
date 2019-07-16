@@ -697,9 +697,13 @@ class model_particles:
         with tf.variable_scope(layer_name.split('/')[0], reuse = True) as vs:
             return bip_kNNGConvLayer_feature_getKernel(input_particle, channels, fCh, mlp, '/'.join(layer_name.split('/')[1:]))
 
-    def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, begin_block = 0, is_train = False, reuse = False):
+    def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, begin_block = 0, is_train = False, reuse = False, bs_override = None):
 
         config = self.config
+
+        bs = self.batch_size
+        if bs_override is not None:
+            bs = bs_override
 
         w_init = tf.random_normal_initializer(     stddev = 0.01 * self.wdev)
         w_init_fold = tf.random_normal_initializer(stddev = 0.01 * self.wdev)
@@ -750,7 +754,7 @@ class model_particles:
 
             # Meta-data
             meta = []
-            # int_meta = tf.reshape(tf.range(coarse_cnt), [self.batch_size, coarse_cnt, 1])
+            # int_meta = tf.reshape(tf.range(coarse_cnt), [bs, coarse_cnt, 1])
 
             self.decBlocks = blocks
             if begin_block > 0:
@@ -771,16 +775,16 @@ class model_particles:
 
                     if generator_struct == 'concat':
                         # generator
-                        # int_meta = tf.broadcast_to(tf.reshape(int_meta, [self.batch_size, coarse_cnt, 1, -1]), [self.batch_size, coarse_cnt, n_per_cluster, 1])
-                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
-                        # z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, 3], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        # int_meta = tf.broadcast_to(tf.reshape(int_meta, [bs, coarse_cnt, 1, -1]), [bs, coarse_cnt, n_per_cluster, 1])
+                        z = tf.random.uniform([bs, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        # z = tf.random.uniform([bs, coarse_cnt, n_per_cluster, 3], minval = -0.5, maxval = 0.5, dtype = default_dtype)
                         uniform_dist = z
                         fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
-                        z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [self.batch_size, coarse_cnt, 1, fdim[bi]]), [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
+                        z = tf.concat([z, tf.broadcast_to(tf.reshape(fuse_fea, [bs, coarse_cnt, 1, fdim[bi]]), [bs, coarse_cnt, n_per_cluster, fdim[bi]])], axis = -1)
                         
-                        # n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi]])
-                        n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] * 2])
-                        # n = tf.reshape(z, [self.batch_size, pcnt[bi], fdim[bi] + 3])
+                        # n = tf.reshape(z, [bs, pcnt[bi], fdim[bi]])
+                        n = tf.reshape(z, [bs, pcnt[bi], fdim[bi] * 2])
+                        # n = tf.reshape(z, [bs, pcnt[bi], fdim[bi] + 3])
                         
                         for gi in range(generator[bi]):
                             with tf.variable_scope('gen%d' % gi):
@@ -803,12 +807,12 @@ class model_particles:
                         else:
                             n = autofc(n, pos_range, name = 'gen_out')
 
-                        n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+                        n = tf.reshape(n, [bs, coarse_cnt, n_per_cluster, pos_range])
 
                     elif generator_struct == 'AdaIN':
                         
                         # generator
-                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        z = tf.random.uniform([bs, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
                         uniform_dist = z
                         
                         fuse_fea = autofc(coarse_fea, fdim[bi], name = 'feaFuse')
@@ -831,8 +835,8 @@ class model_particles:
                                 s_mean = autofc(fuse_fea, gen_hdim[bi], name = 'feaFuse_mean')
                                 s_std  = autofc(fuse_fea, gen_hdim[bi], name = 'feaFuse_std')
 
-                                s_mean = tf.reshape(s_mean, [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
-                                s_std  = tf.reshape(s_std,  [self.batch_size, coarse_cnt, 1, gen_hdim[bi]])
+                                s_mean = tf.reshape(s_mean, [bs, coarse_cnt, 1, gen_hdim[bi]])
+                                s_std  = tf.reshape(s_std,  [bs, coarse_cnt, 1, gen_hdim[bi]])
 
                                 n = AdaIN(n, s_mean, s_std)
                                 # n = AdaIN(n, s_mean, s_std, axes = [0, 1, 2])
@@ -847,7 +851,8 @@ class model_particles:
                         else:
                             n = autofc(n, pos_range, name = 'gen_out')
 
-                        n = tf.reshape(n, [self.batch_size, coarse_cnt, n_per_cluster, pos_range])
+                        n = tf.reshape(n, [bs, coarse_cnt, n_per_cluster, pos_range])
+                        print(n)
                     
                     elif generator_struct == 'final_selection':
                         
@@ -863,14 +868,14 @@ class model_particles:
                             w = autofc(l, pos_range * fdim[bi] , name = 'mlp/w')
                             b = autofc(l, pos_range            , name = 'mlp/b')
 
-                            w = tf.reshape(w, [self.batch_size, coarse_cnt, 1,  fdim[bi], pos_range])
+                            w = tf.reshape(w, [bs, coarse_cnt, 1,  fdim[bi], pos_range])
                             # w = tf.nn.softmax(w, axis = 3)
                             if monotonic:
                                 w = tf.exp(w) # monotonic
-                            # t = tf.reshape(t, [self.batch_size, coarse_cnt, 1, pos_range, pos_range])
-                            b = tf.reshape(b, [self.batch_size, coarse_cnt, 1, pos_range])
+                            # t = tf.reshape(t, [bs, coarse_cnt, 1, pos_range, pos_range])
+                            b = tf.reshape(b, [bs, coarse_cnt, 1, pos_range])
 
-                        z = tf.random.uniform([self.batch_size, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
+                        z = tf.random.uniform([bs, coarse_cnt, n_per_cluster, fdim[bi]], minval = -0.5, maxval = 0.5, dtype = default_dtype)
                         uniform_dist = z
 
                         # Regular generator
@@ -884,12 +889,12 @@ class model_particles:
                                 if gi < (generator[bi] - 1):
                                     z = self.act(z)
                         # Collect features
-                        z = tf.multiply(w, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, fdim[bi], 1]))
+                        z = tf.multiply(w, tf.reshape(z, [bs, coarse_cnt, n_per_cluster, fdim[bi], 1]))
                         z = tf.reduce_sum(z, axis = 3) # z <- [bs, coarse_cnt, n_per_cluster, pos_range]
                         z = z + b
 
                         # Linear transformation
-                        # z = tf.multiply(t, tf.reshape(z, [self.batch_size, coarse_cnt, n_per_cluster, pos_range, 1]))
+                        # z = tf.multiply(t, tf.reshape(z, [bs, coarse_cnt, n_per_cluster, pos_range, 1]))
                         # z = tf.reduce_sum(z, axis = 3)
 
                         n = z
@@ -903,12 +908,12 @@ class model_particles:
                     regularizer += reg_curr * tf.reduce_mean(tf.norm(n, axis = -1))
 
                     # Back to world space
-                    n = n + tf.reshape(coarse_pos, [self.batch_size, coarse_cnt, 1, pos_range])
-                    n_ref = n_ref + tf.reshape(coarse_pos_ref, [self.batch_size, coarse_cnt, 1, pos_range])
+                    n = n + tf.reshape(coarse_pos, [bs, coarse_cnt, 1, pos_range])
+                    n_ref = n_ref + tf.reshape(coarse_pos_ref, [bs, coarse_cnt, 1, pos_range])
 
-                    ap = tf.reshape(n, [self.batch_size, pcnt[bi], pos_range])
-                    ap_ref = tf.reshape(n_ref, [self.batch_size, pcnt[bi], pos_range])
-                    nf = tf.reshape(nf, [self.batch_size, pcnt[bi], -1])
+                    ap = tf.reshape(n, [bs, pcnt[bi], pos_range])
+                    ap_ref = tf.reshape(n_ref, [bs, pcnt[bi], pos_range])
+                    nf = tf.reshape(nf, [bs, pcnt[bi], -1])
 
                     # General operations for full generators
                     gen_only.append(ap)
@@ -948,6 +953,8 @@ class model_particles:
             if output_dim > pos_range:
                 n = autofc(n, output_dim - pos_range, name = 'dec%d/finalLinear' % (blocks - 1))
                 final_particles = tf.concat([pos, n], -1)
+
+            print(final_particles)
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
@@ -1149,7 +1156,7 @@ class model_particles:
                 pX_cur, fX_cur = self.simulator(pX_cur, fX_cur, name = 'Simulator', is_train = is_train, reuse = False if ls == 0 and reuse == False else True)
                 X_cur = tf.concat([pX_cur, fX_cur], axis = -1)
                 loss = self.chamfer_metric(X_cur, X_cur, normalized_X[:, ls+1, :, :], 3, tf.square, EMD = True)
-                loss_total += tf.reduce_mean(loss * self.ph_stepweights[:, ls+1])
+                loss_total += tf.reduce_mean(loss * self.ph_stepweights[:, ls+1]) / (self.sim_steps - 1)
         
         return loss_total
 
@@ -1169,16 +1176,16 @@ class model_particles:
         return sRec[:, :, :3], sRec[:, :, 3:]
 
     # Decodes Y
-    def build_predict_Dec(self, pos, fea, gt, dec_normalize, is_train = False, reuse = False, outDim = 6):
+    def build_predict_Dec(self, pos, fea, gt, dec_normalize, is_train = False, reuse = False, outDim = 6, bs_override = None):
 
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
             
             # 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
-            _, [rec, _, rec_f], _, _, meta = self.particleDecoder(pos, fea, None, outDim, is_train = is_train, reuse = reuse)
+            _, [rec, _, rec_f], _, _, meta = self.particleDecoder(pos, fea, None, outDim, is_train = is_train, reuse = reuse, bs_override = bs_override)
 
         rec = rec
 
-        rec = rec * tf.broadcast_to(dec_normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim]) + tf.broadcast_to(dec_normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])
+        rec = rec * tf.broadcast_to(dec_normalize['std'], rec.shape) + tf.broadcast_to(dec_normalize['mean'], rec.shape)
 
         reconstruct_loss = tf.reduce_mean(self.chamfer_metric(rec, rec, gt[:, :, 0:outDim], 3, tf.square, EMD = True))
 
@@ -1196,7 +1203,7 @@ class model_particles:
         self.ph_rec_g = tf.placeholder(default_dtype, [bs, Np, od])
 
         self.spos, self.sfea = self.build_predict_Sim(self.ph_tst_p, self.ph_tst_f, False, reuse)
-        self.rec, self.rLoss = self.build_predict_Dec(self.ph_tst_p, self.ph_tst_f, self.ph_rec_g, gt_norm, False, decReuse, od)
+        self.rec, self.rLoss = self.build_predict_Dec(self.ph_tst_p, self.ph_tst_f, self.ph_rec_g, gt_norm, False, decReuse, od, bs_override = bs)
 
     def get_test_output(self, inp, gt, sess, verbose = False):
 

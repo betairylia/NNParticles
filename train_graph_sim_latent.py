@@ -318,6 +318,7 @@ epochs = dataLoad.gen_epochs(args.epochs, data_header, args.batch_size, 0.3, arg
 # TODO: loss weights
 loss_weights = np.ones((args.file_sim_steps))
 one_weights = np.ones((args.file_sim_steps))
+loss_weight_mask = np.power(0.95, [i for i in range(train_loops)])
 
 test_raws, test_lats = dataLoad.get_one_test_file(test_rf[0], test_lf[0], 0, args.file_sim_steps)
 
@@ -350,7 +351,7 @@ while True:
         if _x is None:
             break
 
-        _x_lweight = loss_weights[_x_steps]
+        _x_lweight = loss_weights[_x_steps] * loss_weight_mask
         # print(_x_lweight)
 
         if batch_idx_train == 10 and args.profile:
@@ -369,7 +370,7 @@ while True:
 
         if batch_idx_train % 20 == 0:
             _vx, _vx_steps = next(batch_validate, [None, None])
-            _vx_lweight = one_weights[_vx_steps]
+            _vx_lweight = one_weights[_vx_steps] * loss_weight_mask
             
             feed_dict = { model.ph_X: _vx, model.ph_stepweights: _vx_lweight }
             
@@ -381,7 +382,7 @@ while True:
 
         print(colored("(val =%7.4f)" % n_loss, 'blue'))
 
-        if batch_idx_train % 100 == 0:
+        if batch_idx_train % 1000 == 0:
             cprint("Test simulation in progess ... ", 'cyan')
             test_sim_rec, test_loss = model.get_test_output(test_lats[:, 0, :, :], test_raws, sess, verbose = True)
             dataLoad.save_npy_to_GRBin(test_sim_rec[0], './previews/%s/test-%d-rc.grbin' % (args.previewName, batch_idx_train))

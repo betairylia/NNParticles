@@ -102,7 +102,8 @@ def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recomp
                 if xysame == True:
                     # nearest_norm = tf.reduce_max(kNNEdg, axis = 2) # distance to kth nearest point
                     # nearest_norm = tf.ones_like(nearest_norm)
-                    sigma = tf.reduce_mean(tf.reduce_min(kNNEdg[:, :, 1:], axis = 2))
+                    # sigma = tf.reduce_mean(tf.reduce_min(kNNEdg[:, :, 1:], axis = 2))
+                    sigma = tf.reduce_mean(kNNEdg[:, :, 1:])
                     nearest_norm = RBF_dist(kNNEdg, tf.exp(sigma))
                     nearest_norm = tf.reduce_mean(nearest_norm, axis = 2, keepdims = True)
                     # nearest_norm = 1.0 / k / (tf.cast(nearest_norm, default_dtype) + 1e-5)
