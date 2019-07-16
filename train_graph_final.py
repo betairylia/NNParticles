@@ -136,7 +136,7 @@ if model_config == None:
     model_config =\
     {
         'useVector': False,                             # pending
-        'conv': args.conv,                              # pending
+        'conv': args.conv,                              # OK
         'convd': args.conv_dim,                            # OK
         'loss': args.loss_metric,                              # OK
         'maxpoolconv': args.max_pool_conv,              # OK

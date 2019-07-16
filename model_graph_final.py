@@ -32,6 +32,7 @@ PDFNorm = False
 
 PDFNorm = PDFNorm and not nearestNorm
 
+conv_kernel = 'c'
 normalization_method = 'None'
 max_pool_conv = False
 convd_ch = 2
@@ -315,6 +316,40 @@ def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, i
 
     return n # [bs, Nx, channels]
 
+# inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name, nnnorm
+def bip_kNNGConvLayer_concat(Ys, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init = tf.truncated_normal_initializer(stddev=0.1), b_init = tf.constant_initializer(value=0.0), name = 'kNNGConvNaive', nnnorm):
+    
+    with tf.variable_scope(name):
+
+        bs = Ys.shape[0]
+        Nx = kNNIdx.shape[1]
+        Ny = Ys.shape[1]
+        Cy = Ys.shape[2]
+        k = kNNIdx.shape[2]
+        eC = kNNEdg.shape[3]
+
+        neighbors = tf.gather_nd(Ys, kNNIdx)
+        # neighbors: Edge u-v = [u;v;edg]
+        neighbors = tf.concat([neighbors, kNNEdg], axis = -1) # [bs, Nx, k, Cx+Cy+eC]
+
+        ### Do the convolution ###
+
+        n = neighbors
+        for i in range(len(mlp)):
+            n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i)
+            n = brn(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
+            n = tf.nn.leaky_relu(n)
+            # n = tf.nn.elu(n)
+
+        res = n
+        res = tf.reduce_sum(res, axis = 2) # combine_method?
+        res = tf.nn.bias_add(res, b_neighbor)
+
+        if act:
+            res = act(res)
+
+    return res # [bs, Nx, channels]
+
 # Inputs: [bs, N, C]
 #    Pos: [bs, N, 3]
 def kNNGPooling_farthest(inputs, pos, k):
@@ -399,7 +434,13 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
                 mlp = [filters * 2, filters * 2]
                 # mlp = [filters * 3 // 2]
             
-            n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv', nnnorm = nnnorm)
+            if conv_kernel == 'c':
+                n = bip_kNNGConvLayer_feature(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv', nnnorm = nnnorm)
+            elif conv_kernel == 'concat':
+                n = bip_kNNGConvLayer_concat(inputs, gidx, gedg, None, filters, fCh, mlp, is_train, W_init, b_init, 'gconv', nnnorm = nnnorm)
+            else:
+                raise NotImplementedError
+
             if use_norm:
                 n = norm(n, 0.999, is_train, name = 'norm')
                 pass
@@ -512,11 +553,13 @@ class model_particles:
         global max_pool_conv
         global convd_ch
         global nearestNorm
+        global conv_kernel
 
         normalization_method = config['normalization']
         max_pool_conv = config['maxpoolconv']
         convd_ch = config['convd']
         nearestNorm = config['density_estimate']
+        conv_kernel = config['conv']
 
     # 1 of a batch goes in this function at once.
     def particleEncoder(self, input_particle, output_dim, early_stop = 0, is_train = False, reuse = False, returnPool = False):
