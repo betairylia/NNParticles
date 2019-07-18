@@ -336,14 +336,14 @@ def bip_kNNGConvLayer_concat(Ys, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_tra
 
         n = neighbors
         for i in range(len(mlp)):
-            n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i)
-            n = brn(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
+            n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i, W_init = W_init)
+            # n = brn(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
             n = tf.nn.leaky_relu(n)
             # n = tf.nn.elu(n)
 
         res = n
         res = tf.reduce_sum(res, axis = 2) # combine_method?
-        res = autofc(res, channels, None, name = 'kernel/mlp_combine')
+        res = autofc(res, channels, None, name = 'kernel/mlp_combine', W_init = W_init)
 
         if act:
             res = act(res)
@@ -477,14 +477,14 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
         
         return n
 
-def autofc(inputs, outDim, act = None, bias = True, name = 'fc'):
+def autofc(inputs, outDim, act = None, bias = True, name = 'fc', W_init = None):
     
     input_shape = inputs.shape.as_list()
     inputs = tf.reshape(inputs, [-1, input_shape[-1]])
 
     with tf.variable_scope(name):
         
-        w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype)
+        w = tf.get_variable('W', shape = [input_shape[-1], outDim], dtype = default_dtype, initializer = W_init)
 
         x = tf.matmul(inputs, w)
 
@@ -668,7 +668,7 @@ class model_particles:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
                     _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen', recompute = False)
-                    n = gconv(n, bpIdx, bpEdg, 512, self.act, True, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512], nnnorm = nnnorm, kernel_filters = 64)
+                    n = gconv(n, bpIdx, bpEdg, 512, self.act, False, is_train, 'globalPool/gconv', w_init, b_init, mlp = [256, 256], nnnorm = nnnorm, kernel_filters = 64)
                     n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
                     n = autofc(n, 512, name = 'globalPool/fc2')

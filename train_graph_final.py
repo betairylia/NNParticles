@@ -80,6 +80,7 @@ parser.add_argument('-cgen', '--conditional-generator', type = str, default = "A
 parser.add_argument('-modelnorm', '--model-norm', type = str, default = "None", help = "None, BrN, LN, IN")
 parser.add_argument('-maxpconv', '--max-pool-conv', dest = "max_pool_conv", action = 'store_const', default = False, const = True, help = 'Enable max pool conv instead of mean (sum)')
 parser.add_argument('-density', '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
+parser.add_argument('-lvec', '--vector-latent', dest = "use_vector", action = 'store_const', default = False, const = True, help = 'Use latent vector instead of graph')
 
 args = parser.parse_args()
 
@@ -135,10 +136,10 @@ elif args.config != 'None':
 if model_config == None:
     model_config =\
     {
-        'useVector': False,                             # pending
+        'useVector': args.use_vector,                   # OK
         'conv': args.conv,                              # OK
-        'convd': args.conv_dim,                            # OK
-        'loss': args.loss_metric,                              # OK
+        'convd': args.conv_dim,                         # OK
+        'loss': args.loss_metric,                       # OK
         'maxpoolconv': args.max_pool_conv,              # OK
         'density_estimate': args.density_estimation,    # OK
         'normalization': args.model_norm,               # OK
