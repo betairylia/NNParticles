@@ -958,6 +958,10 @@ class model_particles:
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
+    def sinkhorn_iteration(self, a, b, M, reg):
+
+        pass
+
     def chamfer_metric(self, particles, particles_ref, groundtruth, pos_range, loss_func, EMD = False, Sinkhorn = False, is_train = True):
         
         config = self.config

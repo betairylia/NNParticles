@@ -13,6 +13,22 @@ model_name = sys.argv[1]
 rec_dir = os.path.join(rec_dir_prefix, model_name + '/')
 rec_loss_dir = os.path.join(rec_dir, 'loss/')
 
+load_from_file = True
+random_gen = False
+optimal_pc = False
+
+if model_name == 'random':
+    random_gen = True
+    load_from_file = False
+    if not os.path.exists(rec_dir):
+        os.makedirs(rec_dir)
+
+if model_name == 'optimal':
+    optimal_pc = True
+    load_from_file = False
+    if not os.path.exists(rec_dir):
+        os.makedirs(rec_dir)
+
 if not os.path.exists(rec_loss_dir):
     os.makedirs(rec_loss_dir)
 
@@ -58,14 +74,32 @@ cnt = 0
 for rf in rfFiles:
     
     ref_npy = np.load(rf)
-    rec_npy = np.load(os.path.join(rec_dir, os.path.basename(rf)))
+
+    if load_from_file == True:
+        rec_npy = np.load(os.path.join(rec_dir, os.path.basename(rf)))
+    if random_gen == True:
+        mean_std = [np.load(os.path.join(ref_dir, 'mean.npy')), np.load(os.path.join(ref_dir, 'stddev.npy'))]
+
     # print(ref_npy.shape[0])
     # print(rec_npy.shape[0])
     # assert ref_npy.shape[0] == rec_npy.shape[0]
+    
     chunk_loss = []
 
-    for i in range(min(ref_npy.shape[0], rec_npy.shape[0])):
-        loss = EMD(ref_npy[i], rec_npy[i])
+    for i in range(min(ref_npy.shape[0], (rec_npy.shape[0] if load_from_file else ref_npy.shape[0]))):
+        
+        _ref = ref_npy[i]
+        
+        if load_from_file == True:
+            _rec = rec_npy[i]
+        if random_gen == True:
+            _rec = np.random.normal(np.reshape(mean_std[0], (1, 3)), np.reshape(mean_std[1], (1, 3)), size = (2048, 3))
+        if optimal_pc == True:
+            _r = np.random.permutation(_ref)
+            _ref = _r[: 2048]
+            _rec = _r[-2048:]
+
+        loss = EMD(_ref, _rec)
         chunk_loss.append(loss)
         totalLoss += loss
         cnt += 1

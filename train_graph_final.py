@@ -81,6 +81,7 @@ parser.add_argument('-modelnorm', '--model-norm', type = str, default = "None", 
 parser.add_argument('-maxpconv', '--max-pool-conv', dest = "max_pool_conv", action = 'store_const', default = False, const = True, help = 'Enable max pool conv instead of mean (sum)')
 parser.add_argument('-density', '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
 parser.add_argument('-lvec', '--vector-latent', dest = "use_vector", action = 'store_const', default = False, const = True, help = 'Use latent vector instead of graph')
+parser.add_argument('-deep', '--deep-model', dest = "deep", action = 'store_const', default = False, const = True, help = 'Use deep encoder model')
 
 args = parser.parse_args()
 
@@ -155,8 +156,8 @@ if model_config == None:
         'decoder': {
             'blocks' : 1,
             'pcnt' : [2048], # particle count
-            'generator' : [5], # Generator depth
-            'maxLen' : [0.05],
+            'generator' : [6 if args.use_vector else 5], # Generator depth
+            'maxLen' : [0.0 if args.use_vector else 0.05],
             'nConv' : [0],
             'nRes' : [0],
             'hdim' : [args.hidden_dim // 3],
@@ -168,6 +169,17 @@ if model_config == None:
         },
         'stages': [[0, 0]]
     }
+
+    if args.deep == True:
+        model_config['encoder'] = {
+            'blocks': 5,
+            'particles_count': [2048, 768, 256, 96, args.cluster_count],
+            'conv_count': [2, 1, 1, 0, 0],
+            'res_count': [0, 1, 2, 3, 4],
+            'kernel_size': [args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor],
+            'bik': [0, 48, 48, 48, 48],
+            'channels': [args.hidden_dim // 2, args.hidden_dim, args.hidden_dim * 2, args.hidden_dim * 3, max(args.latent_dim, args.hidden_dim * 4)],
+        }
 
 with open(os.path.join(save_path, 'config.json'), 'w') as jsonFile:
     json.dump(model_config, jsonFile)
