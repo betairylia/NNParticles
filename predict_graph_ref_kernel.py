@@ -289,4 +289,4 @@ for bid in range(math.ceil(totalCnt / bs)):
     result_kernel[batch_start:batch_end, :] = _res[0:batch_end - batch_start, :]
 
 result_kernel = np.reshape(result_kernel, (grid_count, grid_count, grid_count, channels * fCh))
-np.save('kernel_visualization/%s.npy' % args.name, result_kernel)
+np.save('kernel_visualization_new/%s_%s_%s.npy' % (args.name, kernel_name, 'full' if full_kernel else 'spatial'), result_kernel)
