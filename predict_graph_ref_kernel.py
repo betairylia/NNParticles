@@ -259,10 +259,11 @@ elif args.load != "None":
 # prepare data
 bs = 2048
 grid_count  = 32
-grid_size   = 0.5
+grid_size   = 0.15
 kernel_name = 'net/ParticleEncoder/enc0/conv_first/gconv'
 channels = model_config['encoder']['channels'][0]
-full_kernel = True
+# channels = 512
+full_kernel = False
 
 grid_lspc = np.linspace(-grid_size, grid_size, grid_count)
 gX, gY, gZ = np.meshgrid(grid_lspc, grid_lspc, grid_lspc)
@@ -274,7 +275,7 @@ ph = tf.placeholder(args.dtype, [bs, 3])
 _kernel = model.getKernelEmbeddings(ph, channels, fCh, None, kernel_name, full_kernel)
 totalCnt = grid_count ** 3
 
-result_kernel = np.zeros((totalCnt, _kernel.get_shape()[1], channels), np.float16)
+result_kernel = np.zeros((totalCnt, channels, _kernel.get_shape()[2]), np.float16)
 batch_feed = np.zeros((bs, 3))
 
 for bid in range(math.ceil(totalCnt / bs)):
@@ -288,7 +289,7 @@ for bid in range(math.ceil(totalCnt / bs)):
     batch_feed[:, :] = 0
     batch_feed[0:batch_end - batch_start, :] = grid_data[batch_start:batch_end, :]
     _res = sess.run(_kernel, feed_dict = {ph: batch_feed})
-    result_kernel[batch_start:batch_end, :] = _res[0:batch_end - batch_start, :]
+    result_kernel[batch_start:batch_end, :, :] = _res[0:batch_end - batch_start, :, :]
 
-result_kernel = np.reshape(result_kernel, (grid_count, grid_count, grid_count, channels * fCh))
+result_kernel = np.reshape(result_kernel, (grid_count, grid_count, grid_count, channels, _kernel.get_shape()[2]))
 np.save('activation_kernel/kernels/%s_%s_%s.npy' % (args.name, kernel_name.replace('/', '_'), 'full' if full_kernel else 'spatial'), result_kernel)

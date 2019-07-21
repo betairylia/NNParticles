@@ -223,6 +223,7 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full =
 
         ### Do the convolution ###
         mlp = mlp
+        # mlp = [512, 512]
         n = inputs
         for i in range(len(mlp)):
             n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i)
@@ -242,7 +243,7 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full =
             n = tf.reduce_sum(tf.multiply(n, w), axis = -1)
             n = tf.transpose(n, [0, 2, 1])
         else:
-            n = tf.reshape(n, [bs, channels, fCh])
+            n = tf.reshape(n, [-1, channels, fCh])
 
     return n # [bs, channels, inp_chanels OR fCh]
 
@@ -692,7 +693,7 @@ class model_particles:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
                     _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen', recompute = False)
-                    n = gconv(n, bpIdx, bpEdg, 512, self.act, False, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512], nnnorm = nnnorm, kernel_filters = 64, act_arr = layer_act, pos_ref = gPos)
+                    n = gconv(n, bpIdx, bpEdg, 512, self.act, False, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512], nnnorm = nnnorm, kernel_filters = 64, act_arr = layer_act, pos_ref = zeroPos)
                     n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
                     n = autofc(n, 512, name = 'globalPool/fc2')
