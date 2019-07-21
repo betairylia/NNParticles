@@ -211,7 +211,7 @@ def bip_kNNGConvLayer_kernel(inputs, kNNIdx, kNNEdg, act, channels, filters, fCh
         
         return n
 
-def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name):
+def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full = True):
     
     with tf.variable_scope(name):
 
@@ -226,13 +226,21 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name):
         n = inputs
         for i in range(len(mlp)):
             n = autofc(n, mlp[i], None, name = 'kernel/mlp%d' % i)
-            n = norm(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
+            n = brn(n, 0.999, is_train, 'kernel/mlp%d/norm' % i)
             n = tf.nn.leaky_relu(n)
             # n = tf.nn.elu(n)
 
         n = autofc(n, channels * fCh, None, name = 'kernel/mlp_out')
 
-    return n # [bs, channels * fCh]
+        if full == True:
+            w = tf.get_variable('feature/feature_combine/W')
+            n = tf.reshape(n, [bs, channels * fCh,  1])
+            w = tf.reshape(w, [ 1, -1, channels * fCh])
+            n = tf.matmul(w, n)
+        else:
+            n = tf.reshape(n, [bs, channels, fCh])
+
+    return n # [bs, channels, inp_chanels OR fCh]
 
 def bip_kNNGConvLayer_feature(inputs, kNNIdx, kNNEdg, act, channels, fCh, mlp, is_train, W_init, b_init, name, nnnorm):
     
@@ -417,7 +425,7 @@ def kNNGPosition_refine(input_position, input_feature, refine_maxLength, act, hi
 
         return refined_pos
 
-def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, name = 'gconv', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None, kernel_filters = 16, k_init = tf.constant_initializer(value=1.0)):
+def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, name = 'gconv', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None, kernel_filters = 16, k_init = tf.constant_initializer(value=1.0), act_arr = None, pos_ref = None):
     
     with tf.variable_scope(name):
         
@@ -456,9 +464,12 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
             if act:
                 n = act(n)
 
+        if act_arr != None:
+            act_arr.append({'name': name, 'act': tf.concat([pos_ref, n], axis = -1)})
+
     return n
 
-def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None, kernel_filters = 16, k_init = tf.constant_initializer(value=1.0)):
+def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True, is_train = True, name = 'block', W_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype), b_init = tf.constant_initializer(value=0.0), mlp = None, nnnorm = None, kernel_filters = 16, k_init = tf.constant_initializer(value=1.0), act_arr = None, pos_ref = None):
 
     with tf.variable_scope(name):
         
@@ -468,7 +479,7 @@ def convRes(inputs, gidx, gedg, num_conv, num_res, filters, act, use_norm = True
             nn = n
             with tf.variable_scope('res%d' % r):
                 for c in range(num_conv):
-                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp, nnnorm = nnnorm, kernel_filters = kernel_filters, k_init = k_init)
+                    nn = gconv(nn, gidx, gedg, filters, act, use_norm, is_train, 'conv%d' % c, W_init, b_init, mlp, nnnorm = nnnorm, kernel_filters = kernel_filters, k_init = k_init, act_arr = act_arr, pos_ref = pos_ref)
             
             n = n + nn
         
@@ -562,7 +573,7 @@ class model_particles:
         conv_kernel = config['conv']
 
     # 1 of a batch goes in this function at once.
-    def particleEncoder(self, input_particle, output_dim, early_stop = 0, is_train = False, reuse = False, returnPool = False):
+    def particleEncoder(self, input_particle, output_dim, early_stop = 0, is_train = False, reuse = False, returnPool = False, returnAct = False):
 
         config = self.config
 
@@ -571,6 +582,8 @@ class model_particles:
         # w_init = tf.contrib.layers.xavier_initializer(dtype = default_dtype)
         b_init = tf.constant_initializer(value=0.0)
         g_init = tf.random_normal_initializer(1., 0.02)
+
+        activations = []
 
         with tf.variable_scope("ParticleEncoder", reuse = reuse) as vs:
 
@@ -626,6 +639,8 @@ class model_particles:
                 
                 with tf.variable_scope('enc%d' % i):
 
+                    layer_act = []
+
                     if i > 0:
                         
                         # Pooling
@@ -642,7 +657,9 @@ class model_particles:
 
                         # Collect features after pool
                         _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(gPos, prev_pos, bik[i], 3, name = 'gpool/ggen', recompute = False)
-                        n = gconv(prev_n, bpIdx, bpEdg, channels[i], self.act, True, is_train, 'gpool/gconv', w_init, b_init, nnnorm = nnnorm, kernel_filters = bikfilters[i])
+                        n = gconv(prev_n, bpIdx, bpEdg, channels[i], self.act, True, is_train, 'gpool/gconv', w_init, b_init, nnnorm = nnnorm, kernel_filters = bikfilters[i], act_arr = layer_act, pos_ref = gPos)
+
+                        layer_act.append(tf.concat([gPos, n], axis = -1))
 
                     if i == 1:
                         edg_sample = bpEdg[..., 0:3] # + tf.random.uniform([self.batch_size, particles_count[i], 1, 3], minval = -24., maxval = 24.)
@@ -656,10 +673,14 @@ class model_particles:
 
                     if i == 0:
                         # no norm was applied to first conv
-                        n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init, kernel_filters = kfilters[i])
+                        n = gconv(n, gIdx, gEdg, channels[i], self.act, True, is_train, 'conv_first', w_init, b_init, kernel_filters = kfilters[i], act_arr = layer_act, pos_ref = gPos)
                     
-                    n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i])
-                    n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i])
+                    n = convRes(n, gIdx, gEdg, conv_count[i], 1, channels[i], self.act, True, is_train, 'conv', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i], act_arr = layer_act, pos_ref = gPos)
+                    n = convRes(n, gIdx, gEdg, 2,  res_count[i], channels[i], self.act, True, is_train, 'res', w_init, b_init, nnnorm = nnnorm, kernel_filters = kfilters[i], act_arr = layer_act, pos_ref = gPos)
+
+                    activations.append(layer_act)
+
+            layer_act = []
 
             if self.useVector == False and early_stop == 0:
                 n = autofc(n, target_dim, name = 'enc%d/convOut' % (blocks - 1))
@@ -668,7 +689,7 @@ class model_particles:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
                     _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen', recompute = False)
-                    n = gconv(n, bpIdx, bpEdg, 512, self.act, False, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512], nnnorm = nnnorm, kernel_filters = 64)
+                    n = gconv(n, bpIdx, bpEdg, 512, self.act, False, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512], nnnorm = nnnorm, kernel_filters = 64, act_arr = layer_act, pos_ref = gPos)
                     n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
                     n = autofc(n, 512, name = 'globalPool/fc2')
@@ -686,12 +707,17 @@ class model_particles:
 
                     gPos = zeroPos
 
+                    activations.append(layer_act)
+
+            if returnAct == True:
+                return gPos, n, var_list, freq_loss, pool_eval_func, edg_sample, gt_density, activations
+
             if returnPool == True:
                 return gPos, n, var_list, pool_pos, freq_loss, pool_eval_func, gt_density
 
             return gPos, n, var_list, freq_loss, pool_eval_func, edg_sample, gt_density
     
-    def getKernelEmbeddings(self, input_particle, channels, fCh, mlp, layer_name):
+    def getKernelEmbeddings(self, input_particle, channels, fCh, mlp, layer_name, full = False):
 
         is_train = False
 
@@ -702,7 +728,7 @@ class model_particles:
             fCh = 2
 
         with tf.variable_scope(layer_name.split('/')[0], reuse = True) as vs:
-            return bip_kNNGConvLayer_feature_getKernel(input_particle, channels, fCh, mlp, '/'.join(layer_name.split('/')[1:]))
+            return bip_kNNGConvLayer_feature_getKernel(input_particle, channels, fCh, mlp, '/'.join(layer_name.split('/')[1:]), full = full)
 
     def particleDecoder(self, cluster_pos, local_feature, groundTruth_card, output_dim, begin_block = 0, is_train = False, reuse = False):
 
@@ -1071,7 +1097,7 @@ class model_particles:
         with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
 
             # Go through the particle AE
-            posX, feaX, _v, _floss, eX, esamp, gtd = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse)
+            posX, feaX, _v, _floss, eX, esamp, gtd, all_act = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse, returnAct = True)
             outDim = self.outDim
             _, [rec_X, rec_X_ref, fold_X], _, r, meta = self.particleDecoder(posX, feaX, self.ph_card, outDim, is_train = is_train, reuse = reuse)
 
@@ -1130,7 +1156,7 @@ class model_particles:
             gt_w_d = tf.concat([self.ph_X[:, :, 0:outDim], tf.reshape(gtd, [self.batch_size, self.gridMaxSize, 1])], axis = -1)
         else:
             gt_w_d = self.ph_X[:, :, 0:outDim]
-        return rec, gt_w_d, loss, vls, meta, esamp
+        return rec, gt_w_d, loss, vls, meta, esamp, all_act
 
     # Only encodes X
     def build_predict_Enc(self, is_train = False, reuse = False):
@@ -1146,9 +1172,12 @@ class model_particles:
             # gPos, n, var_list, pool_pos, freq_loss, pool_eval_func, gt_density
 
             # Enc(X)
-            posX, feaX, _v, pPos, _floss, evals, _density = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse, returnPool = True)
+            # posX, feaX, _v, _floss, eX, esamp, gtd, all_act
+            posX, feaX, _v, _floss, evals, esamp, _density, all_act = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse, returnAct = True)
             # var_list.append(_v)
             # floss += _floss
+
+            self.enc_layers = all_act
 
         return posX, feaX, normalized_X
     
@@ -1180,11 +1209,11 @@ class model_particles:
 
         # Train & Validation
         _, _,\
-        self.train_particleLosses, self.particle_vars, _, _ =\
+        self.train_particleLosses, self.particle_vars, _, _, _ =\
             self.build_network(True, False, self.doLoop, self.doSim)
 
         self.val_rec, self.val_gt,\
-        self.val_particleLoss, _, self.particle_meta, self.edge_sample =\
+        self.val_particleLoss, _, self.particle_meta, self.edge_sample, self.enc_layers =\
             self.build_network(False, True, self.doLoop, self.doSim)
 
         self.train_ops = []

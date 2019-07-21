@@ -12,9 +12,8 @@ import os
 
 from termcolor import colored, cprint
 
-import model_graph_ref as model
-from model_graph_ref import model_particles as model_net
-from config_graph_ref import config as model_config
+import model_graph_final as model
+from model_graph_final import model_particles as model_net
 
 # import model_graph as model
 # from model_graph import model_particles as model_net
@@ -70,6 +69,18 @@ parser.add_argument('-debug', '--debug', dest = "enable_debug", action = 'store_
 parser.add_argument('-prof', '--profile', dest = "profile", action = 'store_const', default = False, const = True, help = "Enable profiling (at step 10)")
 # parser.add_argument('-prof', '--profile', type = str, default = "None", help = "Path to store profiling timeline (at step 100)")
 
+parser.add_argument('-conv', '--conv', type = str, default = "c", help = "c, concat, attention")
+parser.add_argument('-convd', '--conv_dim', type = int, default = 2, help = "d in cconv")
+parser.add_argument('-loss', '--loss-metric', type = str, default = "EMDUB", help = "chamfer, EMDUB, sinkhorn")
+parser.add_argument('-cgen', '--conditional-generator', type = str, default = "AdaIN", help = "AdaIN, concat, final_selection")
+parser.add_argument('-modelnorm', '--model-norm', type = str, default = "None", help = "None, BrN, LN, IN")
+parser.add_argument('-maxpconv', '--max-pool-conv', dest = "max_pool_conv", action = 'store_const', default = False, const = True, help = 'Enable max pool conv instead of mean (sum)')
+parser.add_argument('-density', '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
+parser.add_argument('-lvec', '--vector-latent', dest = "use_vector", action = 'store_const', default = False, const = True, help = 'Use latent vector instead of graph')
+parser.add_argument('-deep', '--deep-model', dest = "deep", action = 'store_const', default = False, const = True, help = 'Use deep encoder model')
+
+parser.add_argument('-latent', '--latent-code', dest = 'latent_code', action='store_const', default = False, const = True, help = "Store latent code instead of reconstruction results")
+
 args = parser.parse_args()
 
 dataLoad.maxParticlesPerGrid = args.voxel_size
@@ -88,6 +99,79 @@ if args.previewName == 'unnamed':
 os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 
 logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss", gmtime()) + ")/")
+
+save_path = "savedModels/" + args.name + "/"
+if not os.path.exists(save_path):
+    os.makedirs(save_path)
+
+# Generate or load model configs
+
+args.outpath = os.path.join(args.outpath, args.name)
+if not os.path.exists(args.outpath):
+    os.makedirs(args.outpath)
+
+model_config = None
+
+if args.load != "auto":
+    print("Please use -load auto for any case. THANKS!!")
+    raise NotImplementedError
+
+if args.load == "auto" or args.load == "Auto":
+    print("Loading model config from %s" % os.path.join(save_path, 'config.json'))
+    with open(os.path.join(save_path, 'config.json'), 'r') as jsonFile:
+        model_config = json.load(jsonFile)
+
+elif args.config != 'None':
+    print("Loading model config from %s" % args.config)
+    with open(args.config, 'r') as jsonFile:
+        model_config = json.load(jsonFile)
+
+if model_config == None:
+    model_config =\
+    {
+        'useVector': args.use_vector,                   # OK
+        'conv': args.conv,                              # OK
+        'convd': args.conv_dim,                         # OK
+        'loss': args.loss_metric,                       # OK
+        'maxpoolconv': args.max_pool_conv,              # OK
+        'density_estimate': args.density_estimation,    # OK
+        'normalization': args.model_norm,               # OK
+        'encoder': {
+            'blocks' : 3,
+            'particles_count' : [2048, 512, args.cluster_count],
+            'conv_count' : [2, 0, 0],
+            'res_count' : [0, 2, 3],
+            'kernel_size' : [args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor],
+            'bik' : [0, 48, 96],
+            'channels' : [args.hidden_dim // 2, args.hidden_dim * 2, max(args.latent_dim, args.hidden_dim * 4)],
+        },
+        'decoder': {
+            'blocks' : 1,
+            'pcnt' : [2048], # particle count
+            'generator' : [6 if args.use_vector else 5], # Generator depth
+            'maxLen' : [0.0 if args.use_vector else 0.05],
+            'nConv' : [0],
+            'nRes' : [0],
+            'hdim' : [args.hidden_dim // 3],
+            'fdim' : [512], # dim of features used for folding
+            'gen_hdim' : [512],
+            'knnk' : [args.nearest_neighbor // 2],
+            'genStruct' : args.conditional_generator,
+            'genFeatures' : True,
+        },
+        'stages': [[0, 0]]
+    }
+
+    if args.deep == True:
+        model_config['encoder'] = {
+            'blocks': 5,
+            'particles_count': [2048, 768, 256, 96, args.cluster_count],
+            'conv_count': [2, 1, 1, 0, 0],
+            'res_count': [0, 1, 2, 3, 4],
+            'kernel_size': [args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor],
+            'bik': [0, 48, 48, 48, 48],
+            'channels': [args.hidden_dim // 2, args.hidden_dim, args.hidden_dim * 2, args.hidden_dim * 3, max(args.latent_dim, args.hidden_dim * 4)],
+        }
 
 model.default_dtype = args.dtype
 
@@ -171,19 +255,21 @@ elif args.load != "None":
     saver.restore(sess, args.load)
 
 # prepare data
-grid_count = 32
-grid_size  = 0.8
+bs = 2048
+grid_count  = 32
+grid_size   = 0.8
+kernel_name = 'net/ParticleEncoder/enc1/gpool/gconv/gconv'
+channels = model_config['encoder']['channels'][1]
+full_kernel = True
+
 grid_lspc = np.linspace(-grid_size, grid_size, grid_count)
 gX, gY, gZ = np.meshgrid(grid_lspc, grid_lspc, grid_lspc)
 grid_data = np.stack((gX, gY, gZ), axis = -1)
 grid_data = np.reshape(grid_data, (-1, 3))
 
-channels = model_config['encoder']['channels'][1]
-bs = 2048
-
-fCh = 2
+fCh = model_config['convd']
 ph = tf.placeholder(args.dtype, [bs, 3])
-_kernel = model.getKernelEmbeddings(ph, channels, fCh, None, 'net/ParticleEncoder/enc1/gpool/gconv/gconv')
+_kernel = model.getKernelEmbeddings(ph, channels, fCh, None, kernel_name, full_kernel)
 totalCnt = grid_count ** 3
 
 result_kernel = np.zeros((totalCnt, channels * fCh), np.float16)

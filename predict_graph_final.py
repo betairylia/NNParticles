@@ -85,6 +85,7 @@ parser.add_argument('-lvec', '--vector-latent', dest = "use_vector", action = 's
 parser.add_argument('-deep', '--deep-model', dest = "deep", action = 'store_const', default = False, const = True, help = 'Use deep encoder model')
 
 parser.add_argument('-latent', '--latent-code', dest = 'latent_code', action='store_const', default = False, const = True, help = "Store latent code instead of reconstruction results")
+parser.add_argument('-encact', '--encoder-activations', dest = 'enc_act', action='store_const', default = False, const = True, help = "Output encoder activations")
 
 args = parser.parse_args()
 
@@ -246,6 +247,45 @@ pEnc, fEnc, gtNorm = model.build_predict_Enc(is_train = False, reuse = False)
 rec, rLoss = model.build_predict_Dec(pEnc, fEnc, gtNorm, is_train = False, reuse = False, outDim = args.output_dim)
 outDim = args.output_dim
 
+if args.enc_act == True:
+
+    with open(os.path.join(args.outpath, 'configs.txt'), 'w') as config_fp:
+
+        cprint('Listing all layers in encoder ... ', 'magenta')
+        config_fp.write('All layers:\n')
+        layers = model.enc_layers
+
+        for h in range(len(layers)):
+            for l in range(len(layers[h])):
+                print(colored("%2d.%2d" % (h, l), 'yellow') + ' - ' + colored('%48s' % layers[h][l]['name'], 'green') + ' - ' + colored('(%s)' % (str(layers[h][l]['act'].shape)), 'cyan'))
+                config_fp.write('%2d.%2d - %48s - %s\n' % (h, l, layers[h][l]['name'], str(layers[h][l]['act'].shape)))
+        
+        layer_list_idx = []
+        config_fp.write('\n\nSelections\n===================================\n')
+        while True:
+            input_layer = input('Please enter a layer ID \"x.y\" to register that layer (input \"S\" to stop) ... ')
+            if input_layer == 'S':
+                break
+            
+            input_layer = input_layer.split('.')
+            h = int(input_layer[0])
+            l = int(input_layer[1])
+
+            layer_list_idx.append([h, l])
+
+            print("Following layer has been registered!")
+            print(colored("%2d.%2d" % (h, l), 'yellow') + ' - ' + colored('%48s' % layers[h][l]['name'], 'green') + ' - ' + colored('(%s)' % (str(layers[h][l]['act'].shape)), 'cyan'))
+            config_fp.write('%2d.%2d - %48s - %s\n' % (h, l, layers[h][l]['name'], str(layers[h][l]['act'].shape)))
+    
+    layer_list = []
+    layer_list_name = []
+    print("Registered:")
+    for lay in layer_list_idx:
+        h, l = lay
+        print(colored("%2d.%2d" % (h, l), 'yellow') + ' - ' + colored('%48s' % layers[h][l]['name'], 'green') + ' - ' + colored('(%s)' % (str(layers[h][l]['act'].shape)), 'cyan'))
+        layer_list.append(model.enc_layers[h][l]['act'])
+        layer_list_name.append(model.enc_layers[h][l]['name'].replace('/', '_'))
+
 # Create session
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -301,9 +341,19 @@ for epoch_test, outFileName, outFileShape in dataLoad.gen_epochs_predict(args.ep
     # Train
     ecnt = 0
     epoch_results = []
+    if args.enc_act == True:
+        epoch_layers = [[] for li in range(len(layer_list))]
+
     for _x, _x_size in epoch_test:
 
         batch_idx += 1
+
+        if args.enc_act == True:
+
+            _lays = sess.run(layer_list, feed_dict = { model.ph_X: _x[0] })
+            
+            for li in len(_lays):
+                epoch_layers[li].append(_lays[li])
 
         if args.latent_code == True:
 
@@ -324,3 +374,8 @@ for epoch_test, outFileName, outFileShape in dataLoad.gen_epochs_predict(args.ep
     print("Writing file for Ep %04d ... " % epoch_idx)
     final_result = np.concatenate(epoch_results, axis = 0)
     np.save(os.path.join(args.outpath, outFileName), final_result)
+
+    print("Writing layer activations for Ep %04d ... " % epoch_idx)
+    for li in range(epoch_layers):
+        final_layers = np.concatenate(epoch_layers[li], axis = 0)
+        np.save(os.path.join(args.outpath, layer_list_name[li] + outFileName), final_layers)
