@@ -668,7 +668,7 @@ class model_particles:
                 with tf.variable_scope('enc%d' % blocks):
                     zeroPos = tf.zeros([self.batch_size, 1, 3])
                     _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(zeroPos, gPos, particles_count[blocks - 1], 3, name = 'globalPool/bipgen', recompute = False)
-                    n = gconv(n, bpIdx, bpEdg, 512, self.act, False, is_train, 'globalPool/gconv', w_init, b_init, mlp = [256, 256], nnnorm = nnnorm, kernel_filters = 64)
+                    n = gconv(n, bpIdx, bpEdg, 512, self.act, False, is_train, 'globalPool/gconv', w_init, b_init, mlp = [512, 512], nnnorm = nnnorm, kernel_filters = 64)
                     n = autofc(n, 512, self.act, name = 'globalPool/fc')
                     # n = norm(n, 0.999, is_train, name = 'globalPool/norm')
                     n = autofc(n, 512, name = 'globalPool/fc2')
