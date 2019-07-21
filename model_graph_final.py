@@ -248,7 +248,16 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full =
             cW = tf.reshape(n, [-1, channels, fCh])
             n = autofc(inputs, channels * fCh, None, name = 'feature/feature_combine')
             n = tf.reshape(n, [-1, channels, fCh])
-            n = tf.reduce_sum(tf.multiply(cW, n), axis = -1, keepdims = True)
+            n = tf.reduce_sum(tf.multiply(cW, n), axis = -1)
+            
+            if max_pool_conv == False:
+                b = tf.get_variable('b_out', dtype = default_dtype, shape = [channels], initializer = b_init, trainable = True)
+                n = tf.nn.bias_add(n, b)
+                n = autofc(n, channels, None, name = 'kernel/feature_combine')
+            else:
+                n = autofc(n, channels, None, name = 'kernel/evidance_combine')
+            
+            n = tf.reshape(n, [-1, channels, 1])
 
         else:
             n = tf.reshape(n, [-1, channels, fCh])
