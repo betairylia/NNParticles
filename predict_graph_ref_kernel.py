@@ -274,7 +274,7 @@ ph = tf.placeholder(args.dtype, [bs, 3])
 _kernel = model.getKernelEmbeddings(ph, channels, fCh, None, kernel_name, full_kernel)
 totalCnt = grid_count ** 3
 
-result_kernel = np.zeros((totalCnt, channels * fCh), np.float16)
+result_kernel = np.zeros((totalCnt, _kernel.get_shape()[1], channels), np.float16)
 batch_feed = np.zeros((bs, 3))
 
 for bid in range(math.ceil(totalCnt / bs)):

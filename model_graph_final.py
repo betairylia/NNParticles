@@ -240,6 +240,7 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full =
             n = tf.broadcast_to(n, [n.shape[0], w.shape[1], n.shape[2], n.shape[3]])
             
             n = tf.reduce_sum(tf.multiply(n, w), axis = -1)
+            n = tf.transpose(n, [0, 2, 1])
         else:
             n = tf.reshape(n, [bs, channels, fCh])
 
