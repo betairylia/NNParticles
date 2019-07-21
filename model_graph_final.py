@@ -465,7 +465,8 @@ def gconv(inputs, gidx, gedg, filters, act, use_norm = True, is_train = True, na
                 n = act(n)
 
         if act_arr != None:
-            act_arr.append({'name': name, 'act': tf.concat([pos_ref, n], axis = -1)})
+            cur_name = tf.get_variable_scope().name
+            act_arr.append({'name': cur_name, 'act': tf.concat([pos_ref, n], axis = -1)})
 
     return n
 
@@ -658,8 +659,6 @@ class model_particles:
                         # Collect features after pool
                         _, _, bpIdx, bpEdg, _ = bip_kNNG_gen(gPos, prev_pos, bik[i], 3, name = 'gpool/ggen', recompute = False)
                         n = gconv(prev_n, bpIdx, bpEdg, channels[i], self.act, True, is_train, 'gpool/gconv', w_init, b_init, nnnorm = nnnorm, kernel_filters = bikfilters[i], act_arr = layer_act, pos_ref = gPos)
-
-                        layer_act.append(tf.concat([gPos, n], axis = -1))
 
                     if i == 1:
                         edg_sample = bpEdg[..., 0:3] # + tf.random.uniform([self.batch_size, particles_count[i], 1, 3], minval = -24., maxval = 24.)

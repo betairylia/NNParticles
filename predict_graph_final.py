@@ -263,7 +263,7 @@ if args.enc_act == True:
         layer_list_idx = []
         config_fp.write('\n\nSelections\n===================================\n')
         while True:
-            input_layer = input('Please enter a layer ID \"x.y\" to register that layer (input \"S\" to stop) ... ')
+            input_layer = input('Please enter a layer ID \"x.y\" to register that layer (input \"S\" to stop) ... \n')
             if input_layer == 'S':
                 break
             
@@ -352,7 +352,7 @@ for epoch_test, outFileName, outFileShape in dataLoad.gen_epochs_predict(args.ep
 
             _lays = sess.run(layer_list, feed_dict = { model.ph_X: _x[0] })
             
-            for li in len(_lays):
+            for li in range(len(_lays)):
                 epoch_layers[li].append(_lays[li])
 
         if args.latent_code == True:
@@ -375,7 +375,8 @@ for epoch_test, outFileName, outFileShape in dataLoad.gen_epochs_predict(args.ep
     final_result = np.concatenate(epoch_results, axis = 0)
     np.save(os.path.join(args.outpath, outFileName), final_result)
 
-    print("Writing layer activations for Ep %04d ... " % epoch_idx)
-    for li in range(epoch_layers):
-        final_layers = np.concatenate(epoch_layers[li], axis = 0)
-        np.save(os.path.join(args.outpath, layer_list_name[li] + outFileName), final_layers)
+    if args.enc_act == True:
+        print("Writing layer activations for Ep %04d ... " % epoch_idx)
+        for li in range(len(epoch_layers)):
+            final_layers = np.concatenate(epoch_layers[li], axis = 0)
+            np.save(os.path.join(args.outpath, layer_list_name[li] + "_" + outFileName), final_layers)

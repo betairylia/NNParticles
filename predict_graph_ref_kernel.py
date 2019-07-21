@@ -9,6 +9,7 @@ import argparse
 import random
 import sys
 import os
+import json
 
 from termcolor import colored, cprint
 
@@ -106,9 +107,9 @@ if not os.path.exists(save_path):
 
 # Generate or load model configs
 
-args.outpath = os.path.join(args.outpath, args.name)
-if not os.path.exists(args.outpath):
-    os.makedirs(args.outpath)
+# args.outpath = os.path.join(args.outpath, args.name)
+# if not os.path.exists(args.outpath):
+#     os.makedirs(args.outpath)
 
 model_config = None
 
@@ -190,7 +191,7 @@ if args.dtype == tf.float16:
 _, _, normalize = dataLoad.get_fileNames(args.datapath)
 
 # model = model_net(16, args.latent_dim, args.batch_size, optimizer)
-model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim)
+model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim, model_config)
 model.particle_hidden_dim = args.hidden_dim
 model.loss_func = args.loss_func
 model.combine_method = args.combine_method
@@ -257,9 +258,9 @@ elif args.load != "None":
 # prepare data
 bs = 2048
 grid_count  = 32
-grid_size   = 0.8
-kernel_name = 'net/ParticleEncoder/enc1/gpool/gconv/gconv'
-channels = model_config['encoder']['channels'][1]
+grid_size   = 0.5
+kernel_name = 'net/ParticleEncoder/enc0/conv_first'
+channels = model_config['encoder']['channels'][0]
 full_kernel = True
 
 grid_lspc = np.linspace(-grid_size, grid_size, grid_count)
@@ -289,4 +290,4 @@ for bid in range(math.ceil(totalCnt / bs)):
     result_kernel[batch_start:batch_end, :] = _res[0:batch_end - batch_start, :]
 
 result_kernel = np.reshape(result_kernel, (grid_count, grid_count, grid_count, channels * fCh))
-np.save('kernel_visualization_new/%s_%s_%s.npy' % (args.name, kernel_name, 'full' if full_kernel else 'spatial'), result_kernel)
+np.save('activation_kernel/kernels/%s_%s_%s.npy' % (args.name, kernel_name.replace('/', '_'), 'full' if full_kernel else 'spatial'), result_kernel)
