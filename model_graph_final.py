@@ -234,8 +234,9 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full =
 
         if full == True:
             w = tf.get_variable('feature/feature_combine/W')
-            n = tf.reshape(n, [bs, channels * fCh,  1])
+            n = tf.reshape(n, [-1, channels * fCh,  1])
             w = tf.reshape(w, [ 1, -1, channels * fCh])
+            w = tf.broadcast_to(w, [n.shape[0], w.shape[1], w.shape[2]])
             n = tf.matmul(w, n)
         else:
             n = tf.reshape(n, [bs, channels, fCh])

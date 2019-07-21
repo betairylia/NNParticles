@@ -260,7 +260,7 @@ elif args.load != "None":
 bs = 2048
 grid_count  = 32
 grid_size   = 0.5
-kernel_name = 'net/ParticleEncoder/enc0/conv_first'
+kernel_name = 'net/ParticleEncoder/enc0/conv_first/gconv'
 channels = model_config['encoder']['channels'][0]
 full_kernel = True
 
