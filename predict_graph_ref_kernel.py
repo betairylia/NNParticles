@@ -263,7 +263,7 @@ grid_size   = 0.15
 kernel_name = 'net/ParticleEncoder/enc0/conv_first/gconv'
 channels = model_config['encoder']['channels'][0]
 # channels = 512
-full_kernel = False
+full_kernel = True
 
 grid_lspc = np.linspace(-grid_size, grid_size, grid_count)
 gX, gY, gZ = np.meshgrid(grid_lspc, grid_lspc, grid_lspc)
