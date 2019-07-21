@@ -77,6 +77,8 @@ parser.add_argument('-debug', '--debug', dest = "enable_debug", action = 'store_
 parser.add_argument('-prof', '--profile', dest = "profile", action = 'store_const', default = False, const = True, help = "Enable profiling (at step 10)")
 # parser.add_argument('-prof', '--profile', type = str, default = "None", help = "Path to store profiling timeline (at step 100)")
 
+parser.add_argument('-latent', '--latent-code', dest = 'latent_code', action='store_const', default = False, const = True, help = "Store latent code instead of reconstruction results")
+
 args = parser.parse_args()
 
 def write_models(array, meta, dirc, name):
