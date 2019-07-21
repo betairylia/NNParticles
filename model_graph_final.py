@@ -234,14 +234,22 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full =
         n = autofc(n, channels * fCh, None, name = 'kernel/mlp_out')
 
         if full == True:
-            w = tf.get_variable('feature/feature_combine/W')
-            n = tf.reshape(n, [-1,  1, channels, fCh])
-            w = tf.reshape(w, [ 1, -1, channels, fCh])
-            w = tf.broadcast_to(w, [n.shape[0], w.shape[1], w.shape[2], w.shape[3]])
-            n = tf.broadcast_to(n, [n.shape[0], w.shape[1], n.shape[2], n.shape[3]])
+            # w = tf.get_variable('feature/feature_combine/W')
+            # n = tf.reshape(n, [-1,  1, channels, fCh])
+            # w = tf.reshape(w, [ 1, -1, channels, fCh])
+            # w = tf.broadcast_to(w, [n.shape[0], w.shape[1], w.shape[2], w.shape[3]])
+            # n = tf.broadcast_to(n, [n.shape[0], w.shape[1], n.shape[2], n.shape[3]])
             
-            n = tf.reduce_sum(tf.multiply(n, w), axis = -1)
-            n = tf.transpose(n, [0, 2, 1])
+            # n = tf.reduce_sum(tf.multiply(n, w), axis = -1)
+            # n = tf.transpose(n, [0, 2, 1])
+
+            # inp_channels = tf.get_variable('feature/feature_combine/W').get_shape[0]
+            inps = tf.ones_like(inputs)
+            cW = tf.reshape(n, [-1, channels, fCh])
+            n = autofc(inputs, channels * fCh, None, name = 'feature/feature_combine')
+            n = tf.reshape(n, [-1, channels, fCh])
+            n = tf.reduce_sum(tf.multiply(cW, n), axis = -1, keepdims = True)
+
         else:
             n = tf.reshape(n, [-1, channels, fCh])
 
