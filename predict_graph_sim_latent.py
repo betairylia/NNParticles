@@ -10,19 +10,13 @@ import random
 import sys
 import os
 import json
-import ot
-from matplotlib import pyplot as plt
 
 from termcolor import colored, cprint
 
-import model_graph_final as model
-from model_graph_final import model_particles as model_net
+import model_graph_sim_latent as model
+from model_graph_sim_latent import model_particles as model_net
 
-# import model_graph as model
-# from model_graph import model_particles as model_net
-
-# import dataLoad_particleTest as dataLoad                        # Legacy method, strongly disagree with i.i.d. distribution among batch(epoch)es.
-import dataLoad_graph as dataLoad            # New method, shuffle & mixed randomly
+import dataLoad_graph_sim_latent as dataLoad            # New method, shuffle & mixed randomly
 
 from time import gmtime, strftime
 
@@ -38,6 +32,7 @@ import gc
 parser = argparse.ArgumentParser(description="Run the NN for particle simulation")
 
 parser.add_argument('datapath')
+parser.add_argument('outpath')
 parser.add_argument('-gpu', '--cuda-gpus')
 
 parser.add_argument('-ep', '--epochs', type = int, default = 80)
@@ -62,11 +57,10 @@ parser.add_argument('-l2', '--l2-loss', dest = 'loss_func', action='store_const'
 parser.add_argument('-maxpool', '--maxpool', dest = 'combine_method', action='store_const', default = tf.reduce_mean, const = tf.reduce_max, help = "use Max pooling instead of sum up for permutation invariance")
 parser.add_argument('-adam', '--adam', dest = 'adam', action='store_const', default = True, const = False, help = "Use Adam optimizer")
 parser.add_argument('-fp16', '--fp16', dest = 'dtype', action='store_const', default = tf.float32, const = tf.float16, help = "Use FP16 instead of FP32")
-parser.add_argument('-nloop', '--no-loop', dest = 'doloop', action='store_const', default = False, const = True, help = "Don't loop simulation regularization")
-parser.add_argument('-nsim', '--no-sim', dest = 'dosim', action='store_const', default = False, const = True, help = "Don't do Simulation")
 
 parser.add_argument('-log', '--log', type = str, default = "logs", help = "Path to log dir")
 parser.add_argument('-name', '--name', type = str, default = "NoName", help = "Name to show on tensor board")
+parser.add_argument('-nameAE', '--nameAE', type = str, default = "NoName", help = "Name of AE model to load")
 parser.add_argument('-preview', '--previewName', type = str, default = "unnamed", help = "Name for save preview point clouds")
 parser.add_argument('-save', '--save', type = str, default = "model", help = "Path to store trained model")
 parser.add_argument('-load', '--load', type = str, default = "None", help = "File to load to continue training")
@@ -82,9 +76,8 @@ parser.add_argument('-cgen', '--conditional-generator', type = str, default = "A
 parser.add_argument('-modelnorm', '--model-norm', type = str, default = "None", help = "None, BrN, LN, IN")
 parser.add_argument('-maxpconv', '--max-pool-conv', dest = "max_pool_conv", action = 'store_const', default = False, const = True, help = 'Enable max pool conv instead of mean (sum)')
 parser.add_argument('-density', '--density-estimation', dest = 'density_estimation', action = 'store_const', default = False, const = True, help = 'Use estimated density (reciprocal) as initial point feature')
-parser.add_argument('-lvec', '--vector-latent', dest = "use_vector", action = 'store_const', default = False, const = True, help = 'Use latent vector instead of graph')
-parser.add_argument('-deep', '--deep-model', dest = "deep", action = 'store_const', default = False, const = True, help = 'Use deep encoder model')
-parser.add_argument('-shallow', '--shallow-model', dest = "shallow", action = 'store_const', default = False, const = True, help = 'Use shallow encoder model')
+
+parser.add_argument('-fss', '--file-sim-steps', type = int, default = 380, help = "How many sim steps per run")
 
 args = parser.parse_args()
 
@@ -119,9 +112,13 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_gpus
 
 logPath = os.path.join(args.log, args.name + "(" + strftime("%Y-%m-%d %H-%Mm-%Ss", gmtime()) + ")/")
 
+AE_load_path = "savedModels/" + args.nameAE + "/"
 save_path = "savedModels/" + args.name + "/"
 if not os.path.exists(save_path):
     os.makedirs(save_path)
+
+if not os.path.exists(args.outpath):
+    os.makedirs(args.outpath)
 
 # Generate or load model configs
 
@@ -131,22 +128,31 @@ if args.load == "auto" or args.load == "Auto":
     print("Loading model config from %s" % os.path.join(save_path, 'config.json'))
     with open(os.path.join(save_path, 'config.json'), 'r') as jsonFile:
         model_config = json.load(jsonFile)
-
 elif args.config != 'None':
     print("Loading model config from %s" % args.config)
     with open(args.config, 'r') as jsonFile:
         model_config = json.load(jsonFile)
+else:
+    print("Loading model config from %s" % os.path.join(AE_load_path, 'config.json'))
+    with open(os.path.join(AE_load_path, 'config.json'), 'r') as jsonFile:
+        model_config = json.load(jsonFile)
 
 if model_config == None:
+
     model_config =\
     {
-        'useVector': args.use_vector,                   # OK
-        'conv': args.conv,                              # OK
-        'convd': args.conv_dim,                         # OK
-        'loss': args.loss_metric,                       # OK
+        'useVector': False,                             # pending
+        'conv': args.conv,                              # pending
+        'convd': args.conv_dim,                            # OK
+        'loss': args.loss_metric,                              # OK
         'maxpoolconv': args.max_pool_conv,              # OK
-        'density_estimate': args.density_estimation,    # OK
+        'density_estimate': args.density_estimation,    # pending
         'normalization': args.model_norm,               # OK
+
+        'ccnt': args.cluster_count,
+        'cdim': args.cluster_dim,
+        'steps': args.loop_sim,
+
         'encoder': {
             'blocks' : 3,
             'particles_count' : [2048, 512, args.cluster_count],
@@ -158,9 +164,9 @@ if model_config == None:
         },
         'decoder': {
             'blocks' : 1,
-            'pcnt' : [args.voxel_size], # particle count
-            'generator' : [6 if args.use_vector else 5], # Generator depth
-            'maxLen' : [0.0 if args.use_vector else 0.05],
+            'pcnt' : [2048], # particle count
+            'generator' : [5], # Generator depth
+            'maxLen' : [0.05],
             'nConv' : [0],
             'nRes' : [0],
             'hdim' : [args.hidden_dim // 3],
@@ -170,30 +176,29 @@ if model_config == None:
             'genStruct' : args.conditional_generator,
             'genFeatures' : True,
         },
+        'simulator': {
+            'layers': [256],
+            'knnk': args.nearest_neighbor,
+            'GRU': False,
+            'GRU_hd': 256,
+            'IN': True,
+        },
         'stages': [[0, 0]]
     }
 
-    if args.deep == True:
-        model_config['encoder'] = {
-            'blocks': 5,
-            'particles_count': [2048, 768, 256, 96, args.cluster_count],
-            'conv_count': [2, 1, 1, 0, 0],
-            'res_count': [0, 1, 2, 3, 4],
-            'kernel_size': [args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor, args.nearest_neighbor],
-            'bik': [0, 48, 48, 48, 48],
-            'channels': [args.hidden_dim // 2, args.hidden_dim, args.hidden_dim * 2, args.hidden_dim * 3, max(args.latent_dim, args.hidden_dim * 4)],
-        }
-    
-    elif args.shallow == True:
-        model_config['encoder'] = {
-            'blocks': 2,
-            'particles_count': [args.voxel_size, args.cluster_count],
-            'conv_count': [1, 0],
-            'res_count': [0, 0],
-            'kernel_size': [args.nearest_neighbor, args.nearest_neighbor],
-            'bik': [0, max(128, args.voxel_size)],
-            'channels': [args.hidden_dim // 2, max(args.latent_dim, args.hidden_dim * 4)],
-        }
+elif 'simulator' not in model_config: # add to AE config
+
+    model_config['ccnt'] = args.cluster_count
+    model_config['cdim'] = args.cluster_dim
+    model_config['steps'] = args.loop_sim
+
+    model_config['simulator'] = {
+        'layers': [256],
+        'knnk': args.nearest_neighbor,
+        'GRU': False,
+        'GRU_hd': 256,
+        'IN': True,
+    }
 
 with open(os.path.join(save_path, 'config.json'), 'w') as jsonFile:
     json.dump(model_config, jsonFile)
@@ -217,7 +222,11 @@ if args.dtype == tf.float16:
     optimizer = tf.contrib.mixed_precision.LossScaleOptimizer(optimizer, loss_scale_manager)
     os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
 
-_, _, normalize = dataLoad.get_fileNames(args.datapath)
+train_val_path = os.path.join(args.datapath, 'train_val/')
+test_path = os.path.join(args.datapath, 'test/')
+
+data_header = dataLoad.get_headers(train_val_path, test_path)
+_, _, normalize, test_lf, test_rf, test_normalize = data_header
 
 # model = model_net(16, args.latent_dim, args.batch_size, optimizer)
 model = model_net(args.voxel_size, args.latent_dim, args.batch_size, optimizer, args.output_dim, model_config)
@@ -227,9 +236,11 @@ model.combine_method = args.combine_method
 model.knn_k = args.nearest_neighbor
 model.cluster_feature_dim = args.cluster_dim
 model.cluster_count = args.cluster_count
-model.doSim = args.dosim
-model.doLoop = args.dosim and args.doloop
+model.doSim = True
+model.doLoop = True
 model.loops = args.loop_sim
+
+train_loops = args.loop_sim
 
 model.normalize = normalize
 if normalize == {}:
@@ -245,21 +256,14 @@ model.initial_grid_size = model.total_world_size / 16
 
 # Build the model
 model.build_model()
+model.build_test_output([1, 2048, 6], test_normalize, True)
 
 # Summary the variables
-ptraps = [tf.summary.scalar('Stage %d - Particle Loss' % i, model.train_particleLosses[i]) for i in range(model.stages)]
-vals = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections = None)
+ptraps = tf.summary.scalar('Training Loss', model.train_loss)
+vals = tf.summary.scalar('Validation Loss', model.val_loss, collections = None)
 
-# from tensorboard.plugins.mesh import summary as mesh_summary
-# pc_rec = mesh_summary.op('Reconstruction', vertices = tf.expand_dims(model.val_rec[0, :, :], 0), colors = tf.constant([[[109, 131, 70]]], shape = [1, args.voxel_size, 3]))
-# pc_gt = mesh_summary.op('Ground truth', vertices = tf.expand_dims(model.val_gt[0, :, :], 0), colors = tf.constant([[[0, 154, 214]]], shape = [1, args.voxel_size, 3]))
-
-merged_train = [tf.summary.merge([ptraps[i]]) for i in range(model.stages)]
-# merged_model_val = tf.summary.merge_all()
-# print("merged model val: " + str(merged_model_val))
+merged_train = tf.summary.merge([ptraps])
 merged_val = tf.summary.merge([vals])
-# merged_mesh = tf.summary.merge([pc_rec, pc_gt])
-# merged_val = tf.summary.merge_all()
 
 # Create session
 config = tf.ConfigProto()
@@ -288,7 +292,6 @@ train_writer = tf.summary.FileWriter(logPath + '/train', sess.graph)
 val_writer = tf.summary.FileWriter(logPath + '/validation', sess.graph)
 
 sess.run(tf.local_variables_initializer())
-# tl.layers.initialize_global_variables(sess)
 sess.run(tf.global_variables_initializer())
 
 # Save & Load
@@ -298,9 +301,15 @@ if args.load == "auto" or args.load == "Auto":
     latest_ckpt = tf.train.latest_checkpoint(save_path)
     if latest_ckpt is not None:
         saver.restore(sess, latest_ckpt)
-        print("Check point loaded: %s" % latest_ckpt)
+        print(colored("Check point loaded: %s" % latest_ckpt, 'red'))
 elif args.load != "None":
     saver.restore(sess, args.load)
+else: # Load AE
+    AEsaver = tf.train.Saver(tf.trainable_variables('net/ParticleDecoder'))
+    latest_ckpt = tf.train.latest_checkpoint(AE_load_path)
+    if latest_ckpt is not None:
+        AEsaver.restore(sess, latest_ckpt)
+        print(colored("AE Check point loaded: %s" % latest_ckpt, 'red'))
 
 batch_idx_train = 0
 batch_idx_test = 0
@@ -308,18 +317,20 @@ batch_idx_test = 0
 epoch_idx = 0
 iteration = 0
 
-maxl_array = np.zeros((2))
-maxl_array[0] = args.voxel_size
-maxl_array[1] = args.voxel_size
+epochs = dataLoad.gen_epochs(args.epochs, data_header, args.batch_size, 0.3, args.loop_sim, args.file_sim_steps)
 
-epCount = dataLoad.fileCount(args.datapath)
-stepFactor = 9
+# TODO: loss weights
+loss_weights = np.ones((args.file_sim_steps))
+one_weights = np.ones((args.file_sim_steps))
+loss_weight_mask = np.power(0.95, [i for i in range(train_loops)])
 
-epochs = dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim)
+test_raws, test_lats = dataLoad.get_one_test_file(test_rf[0], test_lf[0], 0, args.file_sim_steps)
 
-_vr = model.val_rec[0, :, :]
-_vg = model.val_gt[0, :, :]
-_es = model.edge_sample[0]
+if not os.path.exists('./previews/%s/' % args.previewName):
+        os.makedirs('./previews/%s/' % args.previewName)
+
+dataLoad.save_npy_to_GRBin(test_raws[0], './previews/%s/gt.grbin' % args.previewName)
+dataLoad.save_npy_to_GRBin(test_lats[0], './previews/%s/latent.grbin' % args.previewName)
 
 sess.graph.finalize()
 
@@ -340,136 +351,53 @@ while True:
     # Training loop
     while True:
 
-        _x, _x_size = next(batch_train, [None, None])
-        if _x == None:
+        _x, _x_steps = next(batch_train, [None, None])
+        if _x is None:
             break
 
-        # print(_x)
-        # print(_x[0].shape)
+        _x_lweight = loss_weights[_x_steps] * loss_weight_mask
+        # print(_x_lweight)
 
         if batch_idx_train == 10 and args.profile:
             raise NotImplementedError
         
         else:
             
-            feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+            # feed_dict = { model.ph_X: _x, model.ph_stepweights: _x_lweight }
 
-            n_losses = []
-            for i in range(model.stages):
-                _, n_loss, summary = sess.run([model.train_ops[i], model.train_particleLosses[i], merged_train[i]], feed_dict = feed_dict)
-                train_writer.add_summary(summary, batch_idx_train)
-                n_losses.append(n_loss)
+            # _, n_loss, summary = sess.run([model.train_op, model.train_loss, merged_train], feed_dict = feed_dict)
+            # train_writer.add_summary(summary, batch_idx_train)
             
             batch_idx_train += 1
 
-        print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ', end = '')
-        for i in range(len(n_losses)):
-            print(colored("Stg%d =%7.4f" % (i, n_losses[i]), 'green'), end = ' ')
+        # print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ' + colored("Train =%7.4f" % (n_loss), 'green'), end = ' ')
 
-        _vx, _vx_size = next(batch_validate, [None, None])
-        
-        feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
-        
-        n_loss = 0.0
-        if batch_idx_train % 100 == 1:
-            if False and model.edge_sample is not None:
-                n_loss, summary, _rec, _gt, esamp = sess.run([model.val_particleLoss, merged_val, _vr, _vg, _es], feed_dict = feed_dict)
-            elif True:
-                n_loss, summary, _rec, _gt, aEMD, sink, __M = sess.run([model.val_particleLoss, merged_val, _vr, _vg, model.aEMD_plan, model.sink_plan, model.dist_mtrc], feed_dict = feed_dict)
-                _Np = aEMD.shape[0]
-                eEMD = ot.emd(np.ones((_Np,)) / float(_Np), np.ones((_Np,)) / float(_Np), __M)
-           
-                op = './previews/%s/' % args.previewName
-                if not os.path.exists(op):
-                    os.makedirs(op)
-
-                plt.clf()
-                plt.imshow(aEMD)
-                plt.title('aEMD')
-                plt.savefig('./previews/%s/validation-%d-aEMD.png' % (args.previewName, batch_idx_test))
-                
-                plt.clf()
-                plt.imshow(eEMD)
-                plt.title('eEMD')
-                plt.savefig('./previews/%s/validation-%d-eEMD.png' % (args.previewName, batch_idx_test))
-                
-                plt.clf()
-                plt.imshow(sink)
-                plt.title('sink')
-                plt.savefig('./previews/%s/validation-%d-sink.png' % (args.previewName, batch_idx_test))
+        if batch_idx_train % 20 == 0:
+            # _vx, _vx_steps = next(batch_validate, [None, None])
+            # _vx_lweight = one_weights[_vx_steps] * loss_weight_mask
             
-            else:
-                n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, _vr, _vg], feed_dict = feed_dict)
+            # feed_dict = { model.ph_X: _vx, model.ph_stepweights: _vx_lweight }
             
-            val_writer.add_summary(summary, batch_idx_test * 20)
-            # val_writer.add_summary(summary_2, batch_idx_test)
-            
-            if batch_idx_test == 200 and model.edge_sample is not None:
-                write_models(esamp, model.edge_sample[1], './previews/%s' % args.previewName, 'validation-%d-esamp.asc' % batch_idx_test)
-            
-            write_models(_rec, model.particle_meta, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
-            write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
-            # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
+            # n_loss, summary = sess.run([model.val_loss, merged_val], feed_dict = feed_dict)
+            # val_writer.add_summary(summary, batch_idx_test * 20)
             batch_idx_test += 1
-            print(colored("(val =%7.4f)" % n_loss, 'blue'))
-        elif batch_idx_train % 20 == 0:
-            n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
-            val_writer.add_summary(summary, batch_idx_test * 20)
-            batch_idx_test += 1
-            print(colored("(val =%7.4f)" % n_loss, 'blue'))
         else:
-            print('')
+            n_loss = 0.0
 
-        if args.load == 'auto' and batch_idx_test == 1:
+        print(colored("(val =%7.4f)" % n_loss, 'blue'))
 
-            _, m_fea, _, _ = model.build_predict_Enc(model.ph_X, False, True)
-            e_fea = sess.run(m_fea, feed_dict = feed_dict)
-            e_shape = e_fea.shape
-            e_fea = e_fea.reshape([-1, args.cluster_dim])
-            embeddings = tf.Variable(e_fea, name = "cluster_embeddings")
-            emb_init_op = tf.initialize_variables([embeddings])
-            
-            emb_outPath = logPath + "/embeddings"
-            print("Making embeddings in %s" % emb_outPath)
-            
-            summary_writer_emb = tf.summary.FileWriter(emb_outPath)
-
-            if not os.path.exists(emb_outPath):
-                os.makedirs(emb_outPath)
-
-            with open(os.path.join(emb_outPath, "meta.tsv"), 'w') as tsv_file:
-                tsv_file.write("Index\tBatch\n")
-                for emb_bi in range(e_shape[0]):
-                    for emb_pi in range(e_shape[1]):
-                        tsv_file.write("%d\t%d\n" % (emb_bi * e_shape[1] + emb_pi, emb_bi))
-
-            config = projector.ProjectorConfig()
-            emb_config = config.embeddings.add()
-            emb_config.tensor_name = embeddings.name
-            emb_config.metadata_path = "meta.tsv"
-            projector.visualize_embeddings(summary_writer_emb, config)
-
-            sess.run(emb_init_op)
-            emb_saver = tf.train.Saver([embeddings])
-            emb_saver.save(sess, os.path.join(emb_outPath, "embeddings.ckpt"), 1)
+        if batch_idx_train % 1000 == 0:
+            cprint("Test simulation in progess ... ", 'cyan')
+            test_sim_rec, test_loss = model.get_test_output(test_lats[:, 0, :, :], test_raws, sess, verbose = True)
+            np.save(os.path.join(args.outpath, 'rec.npy'), test_sim_rec[0])
+            np.save(os.path.join(args.outpath, 'gt.npy'), test_raws[0])
+            np.save(os.path.join(args.outpath, 'loss.npy'), test_loss)
+            sys.exit(0)
+            # dataLoad.save_npy_to_GRBin(test_sim_rec[0], './previews/%s/test-%d-rc.grbin' % (args.previewName, batch_idx_train))
 
         if batch_idx_train % (16000 // args.batch_size) == 0:
             sav = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
             print("Checkpoint saved in %s" % (sav))
-
-    # Test
-    # for _x, _x_size in epoch_validate:
-    #     feed_dict = { model.ph_X: _x, model.ph_card: _x_size, model.ph_max_length: maxl_array }
-    #     n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
-    #     val_writer.add_summary(summary, round(batch_idx_test * stepFactor))
-    #     batch_idx_test += 1
-
-    #     print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("Validation It %08d" % batch_idx_test, 'magenta') + ' - ' + colored(" Loss = %03.4f" % n_loss, 'green'))
-    
-    # Save the network
-    # if args.save != "None" and epoch_idx % 2 == 0:
-    #     save_path = saver.save(sess, "savedModels/" + args.save + "_latest.ckpt")
-    #     print("Temporal checkpoint saved in %s" % (save_path))
 
 # Save the network
 if(args.save != "None"):

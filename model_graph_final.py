@@ -66,6 +66,52 @@ def AdaIN(inputs, mean, std, axes = [2], name = 'AdaIN', epsilon = 1e-5):
 
         return std * (inputs - c_mean) / c_std + mean
 
+# M: [bs, Nr, Nc]
+def tf_Sinkhorn_kernel(M, reg, dtype = tf.float32):
+#     eplison = -100
+    eplison = 0
+    
+    bs = int(M.get_shape()[0])
+    Nr = int(M.get_shape()[1])
+    Nc = int(M.get_shape()[2])
+    
+    # print(bs)
+    # print(Nr)
+    # print(Nc)
+    
+    r  = tf.ones([Nr], dtype) / Nr
+    c  = 1.0 / Nc
+    
+    assert Nr == Nc
+    
+    lmbd = 1.0 / reg
+    K    = tf.exp(-lmbd * M)
+    u    = tf.ones([bs, Nr], dtype) / Nr
+    K2   = tf.matmul(tf.broadcast_to(tf.reshape(tf.linalg.diag(1.0 / r), [1, Nr, Nr]), [bs, Nr, Nr]), K)
+    
+    def cond(i, u, u_prev):
+        return tf.logical_and(tf.less(i, 300), tf.greater(tf.abs(tf.reduce_mean(u - u_prev)), 1e-8))
+    
+    # u:  bs, Nr, 1
+    # c:   1
+    # K:  bs, Nr, Nc
+    # K2: bs, Nr, Nc
+    i = tf.constant(0)
+    u = tf.reshape(u, [bs, Nr, 1])
+    def body(i, u, u_prev):
+        u_prev = u
+        u = 1.0 / (tf.matmul(K2, c / (tf.matmul(K, u, adjoint_a = True))))
+        i = i + 1
+        return [i, u, u_prev]
+    
+    total_idx, u_final, _ = tf.while_loop(cond, body, [i, u, tf.zeros_like(u)], back_prop = False)
+    
+    u = u_final
+    v = c / (tf.matmul(K, u, adjoint_a = True)) # [bs, Nc, 1]
+    plan = u * K * tf.reshape(v, [bs, 1, Nc])
+    
+    return tf.stop_gradient(plan)
+
 # Inputs: [bs, N, C]
 # Builds edges X -> Y
 def bip_kNNG_gen(Xs, Ys, k, pos_range, name = 'kNNG_gen', xysame = False, recompute = True):
@@ -251,7 +297,7 @@ def bip_kNNGConvLayer_feature_getKernel(inputs, channels, fCh, mlp, name, full =
             n = tf.reduce_sum(tf.multiply(cW, n), axis = -1)
             
             if max_pool_conv == False:
-                b = tf.get_variable('b_out', dtype = default_dtype, shape = [channels], initializer = b_init, trainable = True)
+                b = tf.get_variable('b_out', dtype = default_dtype, shape = [channels], trainable = True)
                 n = tf.nn.bias_add(n, b)
                 n = autofc(n, channels, None, name = 'kernel/feature_combine')
             else:
@@ -1005,19 +1051,22 @@ class model_particles:
 
             return 0, [final_particles, final_particles_ref, gen_only[0]], 0, regularizer, meta
 
-    def sinkhorn_iteration(self, a, b, M, reg):
-
-        pass
-
     def chamfer_metric(self, particles, particles_ref, groundtruth, pos_range, loss_func, EMD = False, Sinkhorn = False, is_train = True):
         
         config = self.config
+        sinkx = 1.0
+        sinkr = 1.3e-2
 
         if config['loss'] == 'sinkhorn' and is_train:
+
+            # tf_Sinkhorn_kernel(M, reg, dtype = tf.float32): -> plan (same as M)
 
             bs = groundtruth.shape[0]
             Np = particles.shape[1]
             Ng = groundtruth.shape[1]
+
+            print(particles)
+            print(groundtruth)
 
             # NOTE: current using position (0:3) only here for searching nearest point.
             row_predicted = tf.reshape(particles_ref[:, :, 0:pos_range], [bs, Np, 1, pos_range])
@@ -1025,15 +1074,9 @@ class model_particles:
             # distance = tf.norm(row_predicted - col_groundtru, ord = 'euclidean', axis = -1)
             distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
 
-            _a = tf.ones([bs, Np], tf.float32)
-            _b = tf.ones([bs, Ng], tf.float32)
-
-            _a /= config['decoder']['pcnt'][len(config['decoder']['pcnt']) - 1]
-            _b /= config['decoder']['pcnt'][len(config['decoder']['pcnt']) - 1]
-
-            transport_mat = tf.py_func(Sinkhorn_dist, [particles_ref, groundtruth, _a, _b, distance], tf.float32)
-            distance_loss = distance * transport_mat
-            distance_loss = tf.reduce_sum(distance_loss)
+            transport_plan = tf_Sinkhorn_kernel(distance / tf.reduce_max(distance) * sinkx, sinkr, tf.float32)
+            distance_loss = distance * transport_plan
+            distance_loss = tf.reduce_mean(tf.reduce_sum(distance_loss, axis = [-1, -2]))
 
         elif config['loss'] == 'EMDUB' or not is_train:
             
@@ -1042,12 +1085,19 @@ class model_particles:
             Ng = groundtruth.shape[1]
             
             match = approx_match(groundtruth[:, :, 0:3], particles_ref[:, :, 0:3]) # [bs, Np, Ng]
+            
             row_predicted = tf.reshape(  particles[:, :, :], [bs, Np, 1, -1])
             col_groundtru = tf.reshape(groundtruth[:, :, :], [bs, 1, Ng, -1])
             distance = tf.sqrt(tf.add_n(tf.unstack(tf.square(row_predicted - col_groundtru), axis = -1)))
+            
+            if not is_train:
+                self.aEMD_plan = match[0]
+                self.sink_plan = tf_Sinkhorn_kernel(distance / tf.reduce_max(distance) * sinkx, sinkr, tf.float32)[0]
+                self.dist_mtrc = distance[0]
+            
             distance = distance * match
             distance_loss = tf.reduce_mean(tf.reduce_sum(distance, axis = -1))
-        
+
         elif config['loss'] == 'chamfer' and is_train:
             
             # test - shuffle the groundtruth and calculate the loss
