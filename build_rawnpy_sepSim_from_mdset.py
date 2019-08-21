@@ -5,19 +5,20 @@ import sys
 import struct
 import time
 import random
+import ntpath
 
 import progressbar
 
 FILE_PATH = 'MDSets/2560_BigGrid/'
-outpath = 'MDSets/combined_timeorder/'
+outpath = '/mnt/93196856-2b8a-4c7b-a37b-6affb441b6e0/Datasets/LJP_timeorder/'
 maxParticlesPerGrid = 2560
+particles = 2560
 
-start_step = 0
-singlefile_sim_count = 25
-combines = 25
-maxtotalfiles = 1000
-shuffle_steps = False
 skip_steps = 5
+combines = 20
+
+maxtotalfiles = 1000
+shuffle = False
 
 if not os.path.exists(outpath):
     os.makedirs(outpath)
@@ -191,58 +192,39 @@ def get_fileNames(main_dir):
 files = get_fileNames(FILE_PATH)
 files = files[0:maxtotalfiles]
 totalCount = len(files)
-npyCount = totalCount // singlefile_sim_count
+npyCount = totalCount // combines
 
 sample_header = read_file_header(files[0])
-# assert singlefile_sim_count * singlefile_sim_steps == sample_header['stepCount']
 
-simsteps = (sample_header['stepCount'] - start_step) // skip_steps
+simsteps = (sample_header['stepCount']) // skip_steps
 readcnt = 0
 fcnt = 0
 
 for i in range(npyCount):
     
-    available_sims = min(singlefile_sim_count, totalCount - (i * singlefile_sim_count))
-    particle_array = [np.zeros([simsteps, maxParticlesPerGrid, 6], dtype = np.float32) for k in range(available_sims)]
-    file_contents = []
+    available_sims = combines
+    particle_array = []
 
     # for j in range(0):
     for j in range(available_sims):
 
-        fidx = i * singlefile_sim_count + j
+        fidx = i * combines + j
         if fidx >= totalCount:
             break
 
-        file_contents.append(read_file_override(files[fidx]))
+        particle_array.append(read_file_override(files[fidx])['data'][::skip_steps, 0, :, :])
+        # file_contents.append({})
         readcnt += 1
         print("Read %d / %d" % (readcnt, totalCount))
 
-        file_contents[j]['steporder'] = list(range(start_step, sample_header['stepCount'], skip_steps))
-        if shuffle_steps == True:
-            random.shuffle(file_contents[j]['steporder'])
-
-    # build all indices
-    file_sim_step = simsteps // available_sims
-    indices = [list(range(available_sims)) for k in range(available_sims)]
-    for idxidx in range(available_sims):
-        random.shuffle(indices[idxidx])
-    
     # Build array
-    for j in range(available_sims):
+    for j in range(available_sims // combines):
 
-        for k in range(available_sims):
-            cur_file_content = file_contents[indices[j][k]]
-            particle_array[j][(k*file_sim_step):((k+1)*file_sim_step), :, :] = cur_file_content['data'][cur_file_content['steporder'][(j*file_sim_step):((j+1)*file_sim_step)], 0, :, 0:6]
-    
-    # Build combined array
-    for f in range(available_sims // combines):
-        combine_list = []
-        for c in range(combines):
-            cidx = f * combines + c
-            if cidx >= available_sims:
-                break
-            combine_list.append(particle_array[cidx])
-        final_arr = np.concatenate(combine_list, axis = 0)
+        # print('j %2d' % j)
+        final_arr = np.concatenate(particle_array, axis = 0)
+        if shuffle:
+            final_arr = np.random.permutation(final_arr)
         np.save(os.path.join(outpath, 'combined_%d.npy' % fcnt), final_arr)
         print("Output file %s" % ('combined_%d.npy' % fcnt))
         fcnt += 1
+    
