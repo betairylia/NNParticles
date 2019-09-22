@@ -620,9 +620,15 @@ class model_particles:
 
         self.loss_metric = config['loss']
 
+        if 'n_classes' in config:
+            self.n_classes   = config['n_classes']
+        else:
+            self.n_classes   = 2
+
         self.ph_X           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, outDim + 1]) # x y z vx vy vz 1
         self.ph_Y           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, outDim + 1])
         self.ph_L           = tf.placeholder(default_dtype, [self.batch_size, self.gridMaxSize, outDim + 1]) # Loop simulation (under latent space) ground truth
+        self.ph_labels      = tf.placeholder('int32',       [self.batch_size])
 
         self.ph_card        = tf.placeholder(default_dtype, [self.batch_size]) # card
         self.ph_max_length  = tf.placeholder('int32', [2])
@@ -1143,6 +1149,12 @@ class model_particles:
 
         return tf.cast(distance_loss, default_dtype)
 
+    def SimpleClassifier(self, x, reuse = False):
+        with tf.variable_scope('Classifier', reuse = reuse):
+            logits = autofc(x, self.n_classes, name = 'fc1')
+            prediction = tf.nn.softmax(logits, axis = -1)
+            return prediction, logits
+
     def custom_dtype_getter(self, getter, name, shape=None, dtype=default_dtype, *args, **kwargs):
         
         if dtype is tf.float16:
@@ -1153,6 +1165,24 @@ class model_particles:
         else:
             
             return getter(name, shape, dtype, *args, **kwargs)
+
+    def build_network_classification(self, is_train, reuse, classNum):
+
+        normalized_X = (self.ph_X[:, :, 0:self.outDim] - tf.broadcast_to(self.normalize['mean'], [self.batch_size, self.gridMaxSize, self.outDim])) / tf.broadcast_to(self.normalize['std'], [self.batch_size, self.gridMaxSize, self.outDim])
+       
+        with tf.variable_scope('net', custom_getter = self.custom_dtype_getter):
+            
+            posX, feaX, _v, _floss, eX, esamp, gtd, all_act = self.particleEncoder(normalized_X, self.particle_latent_dim, is_train = is_train, reuse = reuse, returnAct = True)
+            outX = tf.concat([posX, feaX], axis = -1)
+            outX = tf.reduce_max(outX, axis = 1)
+            pred, logits = self.SimpleClassifier(outX, reuse)
+
+            # TODO: complete this part ...
+            loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(tf.one_hot(self.ph_labels, classNum), logits))
+            pred_label = tf.argmax(logits, output_type=tf.dtypes.int32, axis = -1)
+            acc = tf.reduce_mean(tf.cast(tf.equal(self.ph_labels, pred_label), tf.float32))
+
+        return pred, logits, pred_label, acc, loss
 
     def build_network(self, is_train, reuse, loopSim = True, includeSim = True):
 
@@ -1299,3 +1329,17 @@ class model_particles:
                 # self.train_op = self.optimizer.minimize(self.train_particleLoss)
                 train_op = self.optimizer.apply_gradients(capped_gvs)
                 self.train_ops.append(train_op)
+
+    def build_model_classifier(self):
+        _, _, _, self.train_class_acc, self.train_class_loss =\
+            self.build_network_classification(True, False, self.n_classes)
+        
+        self.val_pred, self.val_logits, self.val_pred_label,\
+        self.val_class_acc, self.val_class_loss =\
+            self.build_network_classification(False, True, self.n_classes)
+        
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            gvs = self.optimizer.compute_gradients(self.train_class_loss)
+            capped_gvs = [(tf.clip_by_value(grad, -1., 1.) if grad is not None else None, var) for grad, var in gvs]
+            self.train_op_class = self.optimizer.apply_gradients(capped_gvs)

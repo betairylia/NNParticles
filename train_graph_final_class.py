@@ -23,7 +23,7 @@ from model_graph_final import model_particles as model_net
 # from model_graph import model_particles as model_net
 
 # import dataLoad_particleTest as dataLoad                        # Legacy method, strongly disagree with i.i.d. distribution among batch(epoch)es.
-import dataLoad_graph as dataLoad            # New method, shuffle & mixed randomly
+import dataLoad_graph_class as dataLoad            # New method, shuffle & mixed randomly
 
 from time import gmtime, strftime
 
@@ -39,6 +39,7 @@ import gc
 parser = argparse.ArgumentParser(description="Run the NN for particle simulation")
 
 parser.add_argument('datapath')
+parser.add_argument('classpath')
 parser.add_argument('-gpu', '--cuda-gpus')
 
 parser.add_argument('-ep', '--epochs', type = int, default = 80)
@@ -196,6 +197,10 @@ if model_config == None:
             'channels': [args.hidden_dim // 2, max(args.latent_dim, args.hidden_dim * 4)],
         }
 
+# Read class labels
+class_labels = json.load(open(args.classpath))
+model_config['n_classes'] = len(class_labels)
+
 with open(os.path.join(save_path, 'config.json'), 'w') as jsonFile:
     json.dump(model_config, jsonFile)
 
@@ -245,20 +250,22 @@ model.initial_grid_size = model.total_world_size / 16
 # model.initial_grid_size = model.total_world_size / 4
 
 # Build the model
-model.build_model()
+model.build_model_classifier()
 
 # Summary the variables
-ptraps = [tf.summary.scalar('Stage %d - Particle Loss' % i, model.train_particleLosses[i]) for i in range(model.stages)]
-vals = tf.summary.scalar('Validation Loss', model.val_particleLoss, collections = None)
+ptraps = tf.summary.scalar('Training Loss', model.train_class_loss)
+ptracc = tf.summary.scalar('Training Acc', model.train_class_acc)
+vals = tf.summary.scalar('Validation Loss', model.val_class_loss, collections = None)
+valc = tf.summary.scalar('Validation Acc', model.val_class_acc, collections = None)
 
 # from tensorboard.plugins.mesh import summary as mesh_summary
 # pc_rec = mesh_summary.op('Reconstruction', vertices = tf.expand_dims(model.val_rec[0, :, :], 0), colors = tf.constant([[[109, 131, 70]]], shape = [1, args.voxel_size, 3]))
 # pc_gt = mesh_summary.op('Ground truth', vertices = tf.expand_dims(model.val_gt[0, :, :], 0), colors = tf.constant([[[0, 154, 214]]], shape = [1, args.voxel_size, 3]))
 
-merged_train = [tf.summary.merge([ptraps[i]]) for i in range(model.stages)]
+merged_train = tf.summary.merge([ptraps, ptracc])
 # merged_model_val = tf.summary.merge_all()
 # print("merged model val: " + str(merged_model_val))
-merged_val = tf.summary.merge([vals])
+merged_val = tf.summary.merge([vals, valc])
 # merged_mesh = tf.summary.merge([pc_rec, pc_gt])
 # merged_val = tf.summary.merge_all()
 
@@ -318,9 +325,9 @@ stepFactor = 9
 
 epochs = dataLoad.gen_epochs(args.epochs, args.datapath, args.batch_size, args.velocity_multiplier, True, args.output_dim)
 
-_vr = model.val_rec[0, :, :]
-_vg = model.val_gt[0, :, :]
-_es = model.edge_sample[0]
+# _vr = model.val_rec[0, :, :]
+# _vg = model.val_gt[0, :, :]
+# _es = model.edge_sample[0]
 
 sess.graph.finalize()
 
@@ -341,7 +348,7 @@ while True:
     # Training loop
     while True:
 
-        _x, _x_size = next(batch_train, [None, None])
+        _x, _lab, _x_size = next(batch_train, [None, None, None])
         if _x == None:
             break
 
@@ -353,106 +360,78 @@ while True:
         
         else:
             
-            feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array }
+            feed_dict = { model.ph_X: _x[0], model.ph_card: _x_size, model.ph_max_length: maxl_array, model.ph_labels: _lab }
 
             n_losses = []
-            for i in range(model.stages):
-                _, n_loss, summary = sess.run([model.train_ops[i], model.train_particleLosses[i], merged_train[i]], feed_dict = feed_dict)
-                train_writer.add_summary(summary, batch_idx_train)
-                n_losses.append(n_loss)
+            _, n_loss, summary = sess.run([model.train_op_class, model.train_class_loss, merged_train], feed_dict = feed_dict)
+            train_writer.add_summary(summary, batch_idx_train)
+            n_losses.append(n_loss)
             
             batch_idx_train += 1
 
         print(colored("Ep %04d" % epoch_idx, 'yellow') + ' - ' + colored("It %08d" % batch_idx_train, 'magenta') + ' - ', end = '')
         for i in range(len(n_losses)):
             print(colored("Stg%d =%7.4f" % (i, n_losses[i]), 'green'), end = ' ')
-
-        _vx, _vx_size = next(batch_validate, [None, None])
-        
-        feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array }
         
         n_loss = 0.0
-        if batch_idx_train % 100 == 1:
-            if False and model.edge_sample is not None:
-                n_loss, summary, _rec, _gt, esamp = sess.run([model.val_particleLoss, merged_val, _vr, _vg, _es], feed_dict = feed_dict)
-            elif True:
-                n_loss, summary, _rec, _gt, aEMD, sink, __M = sess.run([model.val_particleLoss, merged_val, _vr, _vg, model.aEMD_plan, model.sink_plan, model.dist_mtrc], feed_dict = feed_dict)
-                _Np = aEMD.shape[0]
-                eEMD = ot.emd(np.ones((_Np,)) / float(_Np), np.ones((_Np,)) / float(_Np), __M)
-           
-                op = './previews/%s/' % args.previewName
-                if not os.path.exists(op):
-                    os.makedirs(op)
+        # if batch_idx_train % 200 == 1:
 
-                plt.clf()
-                plt.imshow(aEMD)
-                plt.title('aEMD')
-                plt.savefig('./previews/%s/validation-%d-aEMD.png' % (args.previewName, batch_idx_test))
-                
-                plt.clf()
-                plt.imshow(eEMD)
-                plt.title('eEMD')
-                plt.savefig('./previews/%s/validation-%d-eEMD.png' % (args.previewName, batch_idx_test))
-                
-                plt.clf()
-                plt.imshow(sink)
-                plt.title('sink')
-                plt.savefig('./previews/%s/validation-%d-sink.png' % (args.previewName, batch_idx_test))
+        #     n_acc, summary = sess.run([model.val_particleLoss, merged_val, _vr, _vg], feed_dict = feed_dict)
             
-            else:
-                n_loss, summary, _rec, _gt = sess.run([model.val_particleLoss, merged_val, _vr, _vg], feed_dict = feed_dict)
+        #     val_writer.add_summary(summary, batch_idx_test * 20)
+        #     # val_writer.add_summary(summary_2, batch_idx_test)
             
-            val_writer.add_summary(summary, batch_idx_test * 20)
-            # val_writer.add_summary(summary_2, batch_idx_test)
-            
-            if batch_idx_test == 200 and model.edge_sample is not None:
-                write_models(esamp, model.edge_sample[1], './previews/%s' % args.previewName, 'validation-%d-esamp.asc' % batch_idx_test)
-            
-            write_models(_rec, model.particle_meta, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
-            write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
-            # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
-            batch_idx_test += 1
-            print(colored("(val =%7.4f)" % n_loss, 'blue'))
-        elif batch_idx_train % 20 == 0:
-            n_loss, summary = sess.run([model.val_particleLoss, merged_val], feed_dict = feed_dict)
-            val_writer.add_summary(summary, batch_idx_test * 20)
-            batch_idx_test += 1
-            print(colored("(val =%7.4f)" % n_loss, 'blue'))
+        #     # write_models(_rec, model.particle_meta, './previews/%s' % args.previewName, 'validation-%d-rec.asc' % batch_idx_test)
+        #     # write_models(_gt, None, './previews/%s' % args.previewName, 'validation-%d-gt.asc' % batch_idx_test)
+        #     # val_writer.add_summary(summary_mesh, batch_idx_test // 100)
+        #     batch_idx_test += 1
+        #     print(colored("(val =%7.4f%%)" % n_acc * 100.0, 'blue'))
+        # elif batch_idx_train % 20 == 0:
+        if batch_idx_train % 20 == 0:
+            n_t_acc = 0.0
+            for i in range(10):
+                _vx, _lab, _vx_size = next(batch_validate, [None, None, None])
+                feed_dict = { model.ph_X: _vx[0], model.ph_card: _vx_size, model.ph_max_length: maxl_array, model.ph_labels: _lab }
+                n_acc, summary = sess.run([model.val_class_acc, merged_val], feed_dict = feed_dict)
+                val_writer.add_summary(summary, batch_idx_test * 2)
+                batch_idx_test += 1
+                n_t_acc += n_acc / 10.0
+            print(colored("(val =%7.4f%%)" % (n_t_acc * 100.0), 'blue'))
         else:
             print('')
 
-        if args.load == 'auto' and batch_idx_test == 1:
+        # if args.load == 'auto' and batch_idx_test == 1:
 
-            _, m_fea, _, _ = model.build_predict_Enc(model.ph_X, False, True)
-            e_fea = sess.run(m_fea, feed_dict = feed_dict)
-            e_shape = e_fea.shape
-            e_fea = e_fea.reshape([-1, args.cluster_dim])
-            embeddings = tf.Variable(e_fea, name = "cluster_embeddings")
-            emb_init_op = tf.initialize_variables([embeddings])
+        #     _, m_fea, _, _ = model.build_predict_Enc(model.ph_X, False, True)
+        #     e_fea = sess.run(m_fea, feed_dict = feed_dict)
+        #     e_shape = e_fea.shape
+        #     e_fea = e_fea.reshape([-1, args.cluster_dim])
+        #     embeddings = tf.Variable(e_fea, name = "cluster_embeddings")
+        #     emb_init_op = tf.initialize_variables([embeddings])
             
-            emb_outPath = logPath + "/embeddings"
-            print("Making embeddings in %s" % emb_outPath)
+        #     emb_outPath = logPath + "/embeddings"
+        #     print("Making embeddings in %s" % emb_outPath)
             
-            summary_writer_emb = tf.summary.FileWriter(emb_outPath)
+        #     summary_writer_emb = tf.summary.FileWriter(emb_outPath)
 
-            if not os.path.exists(emb_outPath):
-                os.makedirs(emb_outPath)
+        #     if not os.path.exists(emb_outPath):
+        #         os.makedirs(emb_outPath)
 
-            with open(os.path.join(emb_outPath, "meta.tsv"), 'w') as tsv_file:
-                tsv_file.write("Index\tBatch\n")
-                for emb_bi in range(e_shape[0]):
-                    for emb_pi in range(e_shape[1]):
-                        tsv_file.write("%d\t%d\n" % (emb_bi * e_shape[1] + emb_pi, emb_bi))
+        #     with open(os.path.join(emb_outPath, "meta.tsv"), 'w') as tsv_file:
+        #         tsv_file.write("Index\tBatch\n")
+        #         for emb_bi in range(e_shape[0]):
+        #             for emb_pi in range(e_shape[1]):
+        #                 tsv_file.write("%d\t%d\n" % (emb_bi * e_shape[1] + emb_pi, emb_bi))
 
-            config = projector.ProjectorConfig()
-            emb_config = config.embeddings.add()
-            emb_config.tensor_name = embeddings.name
-            emb_config.metadata_path = "meta.tsv"
-            projector.visualize_embeddings(summary_writer_emb, config)
+        #     config = projector.ProjectorConfig()
+        #     emb_config = config.embeddings.add()
+        #     emb_config.tensor_name = embeddings.name
+        #     emb_config.metadata_path = "meta.tsv"
+        #     projector.visualize_embeddings(summary_writer_emb, config)
 
-            sess.run(emb_init_op)
-            emb_saver = tf.train.Saver([embeddings])
-            emb_saver.save(sess, os.path.join(emb_outPath, "embeddings.ckpt"), 1)
+        #     sess.run(emb_init_op)
+        #     emb_saver = tf.train.Saver([embeddings])
+        #     emb_saver.save(sess, os.path.join(emb_outPath, "embeddings.ckpt"), 1)
 
         if batch_idx_train % (16000 // args.batch_size) == 0:
             sav = saver.save(sess, save_path + args.save + ".ckpt", global_step = batch_idx_train)
